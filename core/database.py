@@ -56,14 +56,13 @@ async def init_db():
 
         admin_email = os.getenv("ADMIN_EMAIL", "admin@stakebot.com")
         admin_pass  = os.getenv("ADMIN_PASSWORD", "admin1234")
-        exists = await conn.fetchval("SELECT id FROM usuarios WHERE email=$1", admin_email)
-        if not exists:
-            ph = hash_password(admin_pass)
-            await conn.execute(
-                "INSERT INTO usuarios (email,username,password_hash,plan) VALUES ($1,$2,$3,'admin')",
-                admin_email, "admin", ph
-            )
-            log.info(f"Admin creado: {admin_email}")
+        ph = hash_password(admin_pass)
+        await conn.execute("""
+            INSERT INTO usuarios (email, username, password_hash, plan)
+            VALUES ($1, $2, $3, 'admin')
+            ON CONFLICT DO NOTHING
+        """, admin_email, "admin", ph)
+
     log.info("Base de datos inicializada")
 
 def hash_password(password: str) -> str:
@@ -77,7 +76,7 @@ async def crear_usuario(email, username, password, codigo="") -> dict:
     async with pool.acquire() as conn:
         if codigo:
             inv = await conn.fetchrow(
-                "SELECT * FROM invitaciones WHERE codigo=$1 AND usado=FALSE AND usos_actuales<max_usos",
+                "SELECT * FROM invitaciones WHERE codigo=$1 AND usos_actuales<max_usos",
                 codigo.upper()
             )
             if not inv:
@@ -86,7 +85,7 @@ async def crear_usuario(email, username, password, codigo="") -> dict:
         try:
             row = await conn.fetchrow(
                 "INSERT INTO usuarios (email,username,password_hash,plan,codigo_invitacion) VALUES ($1,$2,$3,$4,$5) RETURNING id",
-                email.lower(), username, ph, plan, codigo
+                email.lower().strip(), username.strip(), ph, plan, codigo
             )
             if codigo:
                 await conn.execute(
@@ -103,7 +102,7 @@ async def login(email, password) -> dict:
     async with pool.acquire() as conn:
         user = await conn.fetchrow(
             "SELECT * FROM usuarios WHERE email=$1 AND password_hash=$2 AND activo=TRUE",
-            email.lower(), ph
+            email.lower().strip(), ph
         )
         if not user:
             return {"ok": False, "error": "Email o contraseña incorrectos"}
@@ -132,15 +131,19 @@ async def logout(token):
 async def update_perfil(user_id, data) -> dict:
     permitidos = ["bankroll","moneda","perfil_riesgo","tg_chat_id","tg_activo","username"]
     campos, valores = [], []
-    for i,(k,v) in enumerate([(k,v) for k,v in data.items() if k in permitidos], 1):
-        campos.append(f"{k}=${i}")
-        valores.append(v)
+    for k, v in data.items():
+        if k in permitidos:
+            campos.append(f"{k}=${len(valores)+1}")
+            valores.append(v)
     if not campos:
         return {"ok": False, "error": "Sin campos válidos"}
     valores.append(user_id)
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await conn.execute(f"UPDATE usuarios SET {','.join(campos)} WHERE id=${len(valores)}", *valores)
+        await conn.execute(
+            f"UPDATE usuarios SET {','.join(campos)} WHERE id=${len(valores)}",
+            *valores
+        )
     return {"ok": True}
 
 async def crear_invitacion(plan="premium", max_usos=1, creado_por=None) -> str:
