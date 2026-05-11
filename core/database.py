@@ -52,6 +52,25 @@ async def init_db():
                 fecha_expiracion TIMESTAMPTZ,
                 activa BOOLEAN DEFAULT TRUE
             );
+            CREATE TABLE IF NOT EXISTS historial_picks (
+                id SERIAL PRIMARY KEY,
+                usuario_id INTEGER REFERENCES usuarios(id),
+                pick_id TEXT NOT NULL,
+                evento TEXT,
+                liga TEXT,
+                deporte TEXT,
+                mercado TEXT,
+                equipo_pick TEXT,
+                odds FLOAT,
+                stake_usd FLOAT,
+                tipo TEXT DEFAULT 'value',
+                es_gold BOOLEAN DEFAULT FALSE,
+                estado TEXT DEFAULT 'colocado',
+                pnl FLOAT,
+                fecha_colocado TIMESTAMPTZ DEFAULT NOW(),
+                fecha_resultado TIMESTAMPTZ,
+                UNIQUE(usuario_id, pick_id)
+            );
         """)
 
         admin_email = os.getenv("ADMIN_EMAIL", "admin@stakebot.com")
@@ -145,6 +164,156 @@ async def update_perfil(user_id, data) -> dict:
             *valores
         )
     return {"ok": True}
+
+# ── Historial de picks ─────────────────────────────────────────────────────────
+
+async def guardar_pick(user_id: int, pick: dict) -> dict:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        try:
+            await conn.execute("""
+                INSERT INTO historial_picks
+                    (usuario_id, pick_id, evento, liga, deporte, mercado,
+                     equipo_pick, odds, stake_usd, tipo, es_gold, estado)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'colocado')
+                ON CONFLICT (usuario_id, pick_id) DO NOTHING
+            """,
+                user_id,
+                pick.get("id",""),
+                pick.get("evento",""),
+                pick.get("liga",""),
+                pick.get("deporte",""),
+                pick.get("mercado",""),
+                pick.get("equipo_pick",""),
+                float(pick.get("odds_ref") or pick.get("odds_stake") or 0),
+                float(pick.get("stake_usd") or 0),
+                pick.get("tipo","value"),
+                bool(pick.get("es_gold", False)),
+            )
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+async def actualizar_resultado(pick_db_id: int, user_id: int, estado: str) -> dict:
+    """Actualiza el resultado de un pick (ganado/perdido/void)."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM historial_picks WHERE id=$1 AND usuario_id=$2",
+            pick_db_id, user_id
+        )
+        if not row:
+            return {"ok": False, "error": "Pick no encontrado"}
+
+        stake = row["stake_usd"] or 0
+        odds  = row["odds"] or 0
+
+        if estado == "ganado":
+            pnl = round(stake * (odds - 1), 2)
+        elif estado == "perdido":
+            pnl = -round(stake, 2)
+        else:  # void
+            pnl = 0.0
+
+        await conn.execute("""
+            UPDATE historial_picks
+            SET estado=$1, pnl=$2, fecha_resultado=NOW()
+            WHERE id=$3
+        """, estado, pnl, pick_db_id)
+
+        return {"ok": True, "pnl": pnl}
+
+async def get_historial(user_id: int, limite: int = 100) -> list:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT * FROM historial_picks
+            WHERE usuario_id=$1
+            ORDER BY fecha_colocado DESC
+            LIMIT $2
+        """, user_id, limite)
+        return [dict(r) for r in rows]
+
+async def get_estadisticas(user_id: int) -> dict:
+    """Calcula estadísticas reales del usuario basadas en su historial."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Historial completo
+        todos = await conn.fetch(
+            "SELECT * FROM historial_picks WHERE usuario_id=$1 ORDER BY fecha_colocado DESC",
+            user_id
+        )
+        # Últimos 30 días
+        mes = await conn.fetch("""
+            SELECT * FROM historial_picks
+            WHERE usuario_id=$1
+            AND fecha_colocado >= NOW() - INTERVAL '30 days'
+            ORDER BY fecha_colocado DESC
+        """, user_id)
+
+        def calcular_stats(picks):
+            resueltos = [p for p in picks if p["estado"] in ("ganado","perdido","void")]
+            ganados   = [p for p in resueltos if p["estado"] == "ganado"]
+            perdidos  = [p for p in resueltos if p["estado"] == "perdido"]
+            pnl_total = sum(p["pnl"] or 0 for p in resueltos)
+            invertido = sum(p["stake_usd"] or 0 for p in resueltos)
+            roi       = round(pnl_total / invertido * 100, 2) if invertido > 0 else 0
+            win_rate  = round(len(ganados) / len(resueltos) * 100, 1) if resueltos else 0
+
+            # Por tipo
+            value_r = [p for p in resueltos if p["tipo"] == "value"]
+            sure_r  = [p for p in resueltos if p["tipo"] == "sure"]
+            gold_r  = [p for p in resueltos if p["es_gold"]]
+
+            def tipo_stats(lista):
+                if not lista: return {"total":0,"ganados":0,"win_rate":0,"pnl":0,"roi":0}
+                g = [p for p in lista if p["estado"]=="ganado"]
+                pnl = sum(p["pnl"] or 0 for p in lista)
+                inv = sum(p["stake_usd"] or 0 for p in lista)
+                return {
+                    "total":    len(lista),
+                    "ganados":  len(g),
+                    "win_rate": round(len(g)/len(lista)*100,1),
+                    "pnl":      round(pnl,2),
+                    "roi":      round(pnl/inv*100,2) if inv>0 else 0,
+                }
+
+            # Por deporte
+            deportes = {}
+            for p in resueltos:
+                dep = p["deporte"] or "Otro"
+                if dep not in deportes:
+                    deportes[dep] = []
+                deportes[dep].append(p)
+            dep_stats = {d: tipo_stats(v) for d,v in deportes.items()}
+
+            return {
+                "total_colocados": len(picks),
+                "total_resueltos": len(resueltos),
+                "ganados":         len(ganados),
+                "perdidos":        len(perdidos),
+                "pendientes":      len(picks) - len(resueltos),
+                "win_rate":        win_rate,
+                "pnl_total":       round(pnl_total, 2),
+                "invertido_total": round(invertido, 2),
+                "roi":             roi,
+                "value_stats":     tipo_stats(value_r),
+                "sure_stats":      tipo_stats(sure_r),
+                "gold_stats":      tipo_stats(gold_r),
+                "por_deporte":     dep_stats,
+            }
+
+        user = await conn.fetchrow("SELECT bankroll FROM usuarios WHERE id=$1", user_id)
+        bankroll = float(user["bankroll"]) if user else 1000
+
+        return {
+            "bankroll":    bankroll,
+            "todo":        calcular_stats(todos),
+            "mes":         calcular_stats(mes),
+            "historial":   [dict(r) for r in todos[:50]],
+        }
+
+# ── Admin ──────────────────────────────────────────────────────────────────────
 
 async def crear_invitacion(plan="premium", max_usos=1, creado_por=None) -> str:
     codigo = secrets.token_urlsafe(8).upper()
