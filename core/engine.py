@@ -13,16 +13,16 @@ MAX_STAKE_PCT = float(os.getenv("MAX_STAKE_PCT", 0.05))
 MIN_EDGE      = float(os.getenv("MIN_EDGE_PCT", 0.03))
 MAX_GOLD_TIPS = int(os.getenv("MAX_GOLD_TIPS", 5))
 VENTANA_HORAS = int(os.getenv("VENTANA_HORAS", 36))
+MIN_SURE_PROB = float(os.getenv("MIN_SURE_PROB", 0.85))  # 85% mínimo para Sure Bet
 BASE_URL      = "https://api.the-odds-api.com/v4"
 
-# Mercados a analizar por deporte
 MARKETS_BY_SPORT = {
-    "soccer": ["h2h", "btts", "totals", "spreads"],
-    "tennis": ["h2h", "sets"],
+    "soccer":     ["h2h", "btts", "totals", "spreads"],
+    "tennis":     ["h2h", "sets"],
     "basketball": ["h2h", "totals", "spreads"],
-    "mma": ["h2h"],
-    "baseball": ["h2h", "totals", "spreads"],
-    "esports": ["h2h"],
+    "mma":        ["h2h"],
+    "baseball":   ["h2h", "totals", "spreads"],
+    "esports":    ["h2h"],
 }
 
 SPORTS_ACTIVE = {
@@ -65,15 +65,17 @@ CONTEXT_RULES = [
 MARKET_LABELS = {
     "h2h":     "Resultado (1X2)",
     "btts":    "Ambos anotan",
-    "totals":  "Over/Under goles",
+    "totals":  "Over/Under",
     "spreads": "Hándicap",
     "sets":    "Sets totales",
 }
 
+# ── Data classes ───────────────────────────────────────────────────────────────
+
 @dataclass
 class ValuePick:
     id:               str
-    tipo:             str
+    tipo:             str   # 'value'
     evento:           str
     deporte:          str
     liga:             str
@@ -95,27 +97,36 @@ class ValuePick:
     horas_para_inicio: float
 
 @dataclass
-class SureBet:
-    id:                   str
-    tipo:                 str
-    evento:               str
-    deporte:              str
-    liga:                 str
-    mercado:              str
-    hora_local:           Optional[str]
-    horas_para_inicio:    float
-    pick_a:               str
-    odds_a:               float
-    casa_a:               str
-    stake_a:              float
-    pick_b:               str
-    odds_b:               float
-    casa_b:               str
-    stake_b:              float
-    ganancia_garantizada: float
-    roi_garantizado:      float
-    inversion_total:      float
-    prob_suma:            float
+class SurePick:
+    """
+    High Confidence Pick — el modelo estima probabilidad real ≥ 85%.
+    No es arbitraje. Es análisis profundo de alta convicción.
+    """
+    id:               str
+    tipo:             str   # 'sure'
+    evento:           str
+    deporte:          str
+    liga:             str
+    mercado:          str
+    equipo_pick:      str
+    odds_ref:         float
+    prob_modelo:      float  # probabilidad estimada por el modelo (≥ 85%)
+    prob_pinnacle:    float  # prob según Pinnacle (referencia sharp)
+    prob_consensus:   float  # mediana de todas las casas
+    confianza_pct:    float  # prob_modelo * 100
+    nivel_confianza:  str    # "MUY ALTA" / "ALTA" / "EXTREMA"
+    # Señales adicionales que aumentan la convicción
+    señales:          str
+    # Stake — más alto por la alta confianza
+    stake_usd:        float
+    stake_pct:        float
+    ganancia_pot:     float
+    roi_pct:          float
+    # Contexto
+    contexto_id:      str
+    contexto_desc:    str
+    hora_local:       Optional[str]
+    horas_para_inicio: float
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -151,63 +162,133 @@ def detect_context(equipo: str, deporte: str) -> dict:
                 return rule
     return {"id": "clean", "descripcion": "Sin alertas", "penalizacion": 0.0, "descartar": False}
 
-def pinnacle_prob(bookmakers: list, outcome_name: str, market_key: str) -> Optional[float]:
-    """Probabilidad limpia usando Pinnacle como referencia o mediana del mercado."""
-    pinnacle = next((b for b in bookmakers if b.get("key") == "pinnacle"), None)
-    source   = pinnacle if pinnacle else None
+def prob_pinnacle(bookmakers: list, outcome_name: str, market_key: str) -> Optional[float]:
+    """Probabilidad según Pinnacle — la casa más eficiente del mercado."""
+    bm = next((b for b in bookmakers if b.get("key") == "pinnacle"), None)
+    if not bm:
+        return None
+    for mkt in bm.get("markets", []):
+        if mkt["key"] != market_key:
+            continue
+        outcomes = mkt["outcomes"]
+        odds_t   = next((o["price"] for o in outcomes if o["name"] == outcome_name), None)
+        if not odds_t or odds_t <= 1.0:
+            return None
+        total = sum(1/o["price"] for o in outcomes if o["price"] > 1.0)
+        return (1/odds_t) / total if total > 0 else None
 
-    def prob_from_bm(bm):
+def prob_consensus(bookmakers: list, outcome_name: str, market_key: str) -> Optional[float]:
+    """Mediana de probabilidades de TODAS las casas — elimina outliers."""
+    probs = []
+    for bm in bookmakers:
         for mkt in bm.get("markets", []):
             if mkt["key"] != market_key:
                 continue
             outcomes = mkt["outcomes"]
             odds_t   = next((o["price"] for o in outcomes if o["name"] == outcome_name), None)
             if not odds_t or odds_t <= 1.0:
-                return None
+                continue
             total = sum(1/o["price"] for o in outcomes if o["price"] > 1.0)
-            return (1/odds_t) / total if total > 0 else None
-
-    if source:
-        p = prob_from_bm(source)
-        if p:
-            return p
-
-    # Fallback: mediana de todas las casas
-    probs = []
-    for bm in bookmakers:
-        p = prob_from_bm(bm)
-        if p:
-            probs.append(p)
+            if total > 0:
+                probs.append((1/odds_t) / total)
     if not probs:
         return None
     probs.sort()
     n = len(probs)
     return probs[n//2] if n % 2 else (probs[n//2-1] + probs[n//2]) / 2
 
-def best_odds_for_outcome(bookmakers: list, outcome_name: str, market_key: str) -> tuple[float, str]:
-    """Mejor cuota disponible y qué casa la ofrece."""
-    best_odds = 0.0
-    best_casa = ""
+def odds_count(bookmakers: list, outcome_name: str, market_key: str) -> int:
+    """Cuántas casas ofrecen este outcome — más casas = más liquidez = más confianza."""
+    count = 0
+    for bm in bookmakers:
+        for mkt in bm.get("markets", []):
+            if mkt["key"] != market_key:
+                continue
+            if any(o["name"] == outcome_name and o["price"] > 1.0 for o in mkt["outcomes"]):
+                count += 1
+    return count
+
+def best_odds(bookmakers: list, outcome_name: str, market_key: str) -> tuple[float, str]:
+    """Mejor cuota disponible para este outcome."""
+    best, casa = 0.0, ""
     for bm in bookmakers:
         for mkt in bm.get("markets", []):
             if mkt["key"] != market_key:
                 continue
             odds_t = next((o["price"] for o in mkt["outcomes"] if o["name"] == outcome_name), None)
-            if odds_t and odds_t > best_odds:
-                best_odds = odds_t
-                best_casa = bm.get("title", bm.get("key", ""))
-    return best_odds, best_casa
+            if odds_t and odds_t > best:
+                best = odds_t
+                casa = bm.get("title", bm.get("key", ""))
+    return best, casa
 
-def kelly_stake(prob, odds, bankroll=None, kf=None, maxp=None):
-    if bankroll is None: bankroll = BANKROLL
-    if kf is None:       kf = KELLY_FRAC
-    if maxp is None:     maxp = MAX_STAKE_PCT
+def calc_modelo_prob(
+    p_pinnacle: Optional[float],
+    p_consensus: float,
+    contexto_penalizacion: float,
+    n_casas: int,
+) -> float:
+    """
+    Calcula la probabilidad final del modelo combinando:
+    1. Pinnacle (peso 60%) — la señal más confiable
+    2. Consensus (peso 40%) — validación del mercado amplio
+    3. Bonus por liquidez (más casas = mercado más eficiente)
+    4. Penalización de contexto motivacional
+    """
+    if p_pinnacle is not None:
+        p_base = 0.60 * p_pinnacle + 0.40 * p_consensus
+    else:
+        p_base = p_consensus
+
+    # Bonus de liquidez: más casas cubriendo el evento = más confianza
+    # máximo +2% si hay 8+ casas
+    liquidez_bonus = min(n_casas / 8, 1.0) * 0.02
+    p_ajustada = p_base + liquidez_bonus - contexto_penalizacion
+
+    return max(0.01, min(0.99, p_ajustada))
+
+def nivel_confianza_label(prob: float) -> str:
+    if prob >= 0.92: return "EXTREMA"
+    if prob >= 0.89: return "MUY ALTA"
+    return "ALTA"
+
+def detectar_señales(
+    p_pinnacle: Optional[float],
+    p_consensus: float,
+    n_casas: int,
+    horas: float,
+) -> str:
+    """Genera texto de señales que soportan la alta confianza."""
+    señales = []
+    if p_pinnacle and p_pinnacle > 0.82:
+        señales.append(f"Pinnacle confirma {p_pinnacle*100:.0f}%")
+    if n_casas >= 8:
+        señales.append(f"{n_casas} casas cubren el evento")
+    if horas <= 6:
+        señales.append("Partido en menos de 6hs — odds estables")
+    if abs((p_pinnacle or p_consensus) - p_consensus) < 0.03:
+        señales.append("Consensus muy concentrado — mercado eficiente")
+    if not señales:
+        señales.append(f"Consensus de {n_casas} casas")
+    return " · ".join(señales)
+
+def kelly_stake_sure(prob: float, odds: float, bankroll: float) -> tuple[float, float]:
+    """
+    Para Sure Picks de alta confianza usamos Kelly más agresivo
+    pero con cap del 8% (vs 5% para value bets normales).
+    """
+    b      = odds - 1
+    k      = max(0.0, (b * prob - (1-prob)) / b)
+    kf     = 0.5   # seguimos usando 1/2 Kelly
+    maxp   = 0.08  # cap más alto por la alta confianza
+    capped = min(k * kf, maxp)
+    return round(bankroll * capped, 2), round(capped * 100, 2)
+
+def kelly_stake_value(prob: float, odds: float, kf: float, maxp: float) -> float:
     b = odds - 1
     k = max(0.0, (b * prob - (1-prob)) / b)
-    capped = min(k * kf, maxp)
-    return round(bankroll * capped, 2)
+    return round(BANKROLL * min(k * kf, maxp), 2)
 
-def gold_score(prob, odds, edge, horas):
+def gold_score(prob: float, odds: float, edge: float, horas: float) -> float:
     ev    = prob * (odds - 1)
     score = ev * edge
     if 1.60 <= odds <= 2.50: score *= 1.2
@@ -217,22 +298,30 @@ def gold_score(prob, odds, edge, horas):
     elif horas <= 12:         score *= 1.05
     return round(score, 6)
 
-# ── Value Bets detector ────────────────────────────────────────────────────────
+# ── Analizadores ───────────────────────────────────────────────────────────────
 
-def analizar_value(ev: dict, meta: dict, market_key: str) -> list[ValuePick]:
-    picks      = []
-    home, away = ev["home_team"], ev["away_team"]
-    commence   = ev.get("commence_time", "")
-    bookmakers = ev.get("bookmakers", [])
+def analizar_evento(ev: dict, meta: dict, market_key: str) -> tuple[list, list]:
+    """
+    Analiza un evento en un mercado específico.
+    Retorna (value_picks, sure_picks).
+    """
+    value_picks = []
+    sure_picks  = []
+    home, away  = ev["home_team"], ev["away_team"]
+    commence    = ev.get("commence_time", "")
+    bookmakers  = ev.get("bookmakers", [])
+
     if not bookmakers:
-        return []
+        return [], []
 
     en_v, horas = evento_en_ventana(commence)
     if not en_v:
-        return []
-    hora_local = format_hora(commence, horas)
+        return [], []
 
-    # Recolectar todos los outcomes únicos de este mercado
+    hora_local    = format_hora(commence, horas)
+    mercado_label = MARKET_LABELS.get(market_key, market_key)
+
+    # Recolectar outcomes únicos
     outcomes_set = set()
     for bm in bookmakers:
         for mkt in bm.get("markets", []):
@@ -241,25 +330,64 @@ def analizar_value(ev: dict, meta: dict, market_key: str) -> list[ValuePick]:
                     outcomes_set.add(out["name"])
 
     for outcome_name in outcomes_set:
-        prob_base = pinnacle_prob(bookmakers, outcome_name, market_key)
-        if prob_base is None:
+        # Probabilidades desde diferentes fuentes
+        p_pinn = prob_pinnacle(bookmakers, outcome_name, market_key)
+        p_cons = prob_consensus(bookmakers, outcome_name, market_key)
+        if p_cons is None:
             continue
 
-        best_odds, best_casa = best_odds_for_outcome(bookmakers, outcome_name, market_key)
-        if best_odds <= 1.0:
+        n_casas = odds_count(bookmakers, outcome_name, market_key)
+        mejor_odds, _ = best_odds(bookmakers, outcome_name, market_key)
+        if mejor_odds <= 1.0:
             continue
 
-        ctx     = detect_context(outcome_name, meta["deporte"])
-        penali  = ctx.get("penalizacion", 0.0)
-        prob_aj = max(0.01, prob_base - penali)
-        edge    = prob_aj * best_odds - 1
+        # Contexto motivacional
+        ctx    = detect_context(outcome_name, meta["deporte"])
+        penali = ctx.get("penalizacion", 0.0)
 
-        kf  = ctx.get("kelly_override", KELLY_FRAC)
-        msp = ctx.get("max_stake_override", MAX_STAKE_PCT)
-        stake_usd    = kelly_stake(prob_aj, best_odds, BANKROLL, kf, msp)
-        ganancia_pot = round(stake_usd * (best_odds - 1), 2)
-        roi_pct      = round(ganancia_pot / BANKROLL * 100, 2) if BANKROLL else 0
-        gscore       = gold_score(prob_aj, best_odds, edge, horas)
+        # Probabilidad final del modelo
+        p_modelo = calc_modelo_prob(p_pinn, p_cons, penali, n_casas)
+
+        # ── SURE PICK: probabilidad ≥ 85% ──────────────────────────────────────
+        if p_modelo >= MIN_SURE_PROB and not ctx.get("descartar", False):
+            stake, stake_pct = kelly_stake_sure(p_modelo, mejor_odds, BANKROLL)
+            ganancia         = round(stake * (mejor_odds - 1), 2)
+            roi              = round(ganancia / BANKROLL * 100, 2)
+            señales          = detectar_señales(p_pinn, p_cons, n_casas, horas)
+
+            sure_picks.append(SurePick(
+                id               = f"sure-{ev['id']}-{market_key}-{outcome_name}".replace(" ","_"),
+                tipo             = "sure",
+                evento           = f"{home} vs {away}",
+                deporte          = meta["deporte"],
+                liga             = meta["nombre"],
+                mercado          = mercado_label,
+                equipo_pick      = outcome_name,
+                odds_ref         = mejor_odds,
+                prob_modelo      = round(p_modelo, 4),
+                prob_pinnacle    = round(p_pinn, 4) if p_pinn else round(p_cons, 4),
+                prob_consensus   = round(p_cons, 4),
+                confianza_pct    = round(p_modelo * 100, 1),
+                nivel_confianza  = nivel_confianza_label(p_modelo),
+                señales          = señales,
+                stake_usd        = stake,
+                stake_pct        = stake_pct,
+                ganancia_pot     = ganancia,
+                roi_pct          = roi,
+                contexto_id      = ctx["id"],
+                contexto_desc    = ctx["descripcion"],
+                hora_local       = hora_local,
+                horas_para_inicio= horas,
+            ))
+
+        # ── VALUE PICK: edge positivo ───────────────────────────────────────────
+        edge   = p_modelo * mejor_odds - 1
+        kf     = ctx.get("kelly_override", KELLY_FRAC)
+        msp    = ctx.get("max_stake_override", MAX_STAKE_PCT)
+        stake  = kelly_stake_value(p_modelo, mejor_odds, kf, msp)
+        gan    = round(stake * (mejor_odds - 1), 2)
+        roi_v  = round(gan / BANKROLL * 100, 2)
+        gscore = gold_score(p_modelo, mejor_odds, edge, horas)
 
         descartado = ctx.get("descartar", False) or edge < MIN_EDGE
         razon = None
@@ -268,23 +396,21 @@ def analizar_value(ev: dict, meta: dict, market_key: str) -> list[ValuePick]:
         elif edge < MIN_EDGE:
             razon = f"Edge {edge*100:.1f}% bajo mínimo"
 
-        mercado_label = MARKET_LABELS.get(market_key, market_key)
-
-        picks.append(ValuePick(
-            id               = f"{ev['id']}-{market_key}-{outcome_name}".replace(" ", "_"),
+        value_picks.append(ValuePick(
+            id               = f"{ev['id']}-{market_key}-{outcome_name}".replace(" ","_"),
             tipo             = "value",
             evento           = f"{home} vs {away}",
             deporte          = meta["deporte"],
             liga             = meta["nombre"],
             mercado          = mercado_label,
             equipo_pick      = outcome_name,
-            odds_ref         = best_odds,
-            prob_ajustada    = round(prob_aj, 4),
+            odds_ref         = mejor_odds,
+            prob_ajustada    = round(p_modelo, 4),
             edge             = round(edge, 4),
             gold_score       = gscore,
-            stake_usd        = stake_usd,
-            ganancia_pot     = ganancia_pot,
-            roi_diario_pct   = roi_pct,
+            stake_usd        = stake,
+            ganancia_pot     = gan,
+            roi_diario_pct   = roi_v,
             es_gold          = False,
             contexto_id      = ctx["id"],
             contexto_desc    = ctx["descripcion"],
@@ -293,112 +419,8 @@ def analizar_value(ev: dict, meta: dict, market_key: str) -> list[ValuePick]:
             hora_local       = hora_local,
             horas_para_inicio= horas,
         ))
-    return picks
 
-# ── Sure Bets detector ─────────────────────────────────────────────────────────
-
-def detectar_sure_bets(ev: dict, meta: dict, market_key: str) -> list[SureBet]:
-    """
-    Detecta sure bets comparando las mejores cuotas de TODAS las casas.
-    Una sure bet existe cuando: 1/odds_A + 1/odds_B < 1
-    Garantiza ganancia matemática sin importar el resultado.
-    """
-    sure_bets  = []
-    home, away = ev["home_team"], ev["away_team"]
-    commence   = ev.get("commence_time", "")
-    bookmakers = ev.get("bookmakers", [])
-    if not bookmakers:
-        return []
-
-    en_v, horas = evento_en_ventana(commence)
-    if not en_v:
-        return []
-    hora_local = format_hora(commence, horas)
-
-    # Construir mapa: outcome -> mejor cuota + casa
-    outcome_best: dict[str, tuple[float, str]] = {}
-    for bm in bookmakers:
-        for mkt in bm.get("markets", []):
-            if mkt["key"] != market_key:
-                continue
-            for out in mkt["outcomes"]:
-                name  = out["name"]
-                price = out["price"]
-                if price <= 1.0:
-                    continue
-                if name not in outcome_best or price > outcome_best[name][0]:
-                    outcome_best[name] = (price, bm.get("title", bm.get("key", "")))
-
-    outcomes = list(outcome_best.keys())
-    if len(outcomes) < 2:
-        return []
-
-    # Para mercados binarios (h2h sin empate, btts, over/under)
-    # comparamos pares de outcomes opuestos
-    pares = []
-    if market_key == "h2h" and len(outcomes) == 2:
-        pares = [(outcomes[0], outcomes[1])]
-    elif market_key == "h2h" and len(outcomes) == 3:
-        # Fútbol con empate: buscar el par con menor suma de impl prob
-        for i in range(len(outcomes)):
-            for j in range(i+1, len(outcomes)):
-                pares.append((outcomes[i], outcomes[j]))
-    elif market_key in ("btts", "totals", "spreads"):
-        if len(outcomes) == 2:
-            pares = [(outcomes[0], outcomes[1])]
-
-    mercado_label = MARKET_LABELS.get(market_key, market_key)
-
-    for pick_a_name, pick_b_name in pares:
-        odds_a, casa_a = outcome_best[pick_a_name]
-        odds_b, casa_b = outcome_best[pick_b_name]
-
-        prob_suma = (1/odds_a) + (1/odds_b)
-
-        # Sure bet confirmada si prob_suma < 1 (ganancia garantizada)
-        # Para Gold Tips queremos < 0.97 (ROI > 3% garantizado)
-        if prob_suma >= 1.0:
-            continue
-
-        # Calcular stakes óptimos para garantizar misma ganancia en ambos lados
-        # stake_a / stake_b = odds_b / odds_a
-        inversion = BANKROLL * MAX_STAKE_PCT * 2  # usamos 10% del bankroll total
-        stake_a = round(inversion * (1/odds_a) / prob_suma, 2)
-        stake_b = round(inversion * (1/odds_b) / prob_suma, 2)
-        inversion_total = stake_a + stake_b
-
-        ganancia_a = stake_a * odds_a - inversion_total
-        ganancia_b = stake_b * odds_b - inversion_total
-        ganancia   = round(min(ganancia_a, ganancia_b), 2)
-        roi        = round(ganancia / inversion_total * 100, 2) if inversion_total > 0 else 0
-
-        if roi < 1.0:  # mínimo 1% de ROI garantizado
-            continue
-
-        sure_bets.append(SureBet(
-            id                   = f"sure-{ev['id']}-{market_key}-{pick_a_name}-{pick_b_name}".replace(" ", "_"),
-            tipo                 = "sure",
-            evento               = f"{home} vs {away}",
-            deporte              = meta["deporte"],
-            liga                 = meta["nombre"],
-            mercado              = mercado_label,
-            hora_local           = hora_local,
-            horas_para_inicio    = horas,
-            pick_a               = pick_a_name,
-            odds_a               = odds_a,
-            casa_a               = casa_a,
-            stake_a              = stake_a,
-            pick_b               = pick_b_name,
-            odds_b               = odds_b,
-            casa_b               = casa_b,
-            stake_b              = stake_b,
-            ganancia_garantizada = ganancia,
-            roi_garantizado      = roi,
-            inversion_total      = inversion_total,
-            prob_suma            = round(prob_suma, 4),
-        ))
-
-    return sure_bets
+    return value_picks, sure_picks
 
 # ── Scanner principal ──────────────────────────────────────────────────────────
 
@@ -406,14 +428,14 @@ def escanear_mercado() -> dict:
     if not API_KEY:
         raise ValueError("Sin API key configurada")
 
-    value_picks: list[ValuePick] = []
-    sure_bets:   list[SureBet]  = []
+    all_value:  list[ValuePick] = []
+    all_sure:   list[SurePick]  = []
     descartados: list[ValuePick] = []
     total = 0
 
     for sport_key, meta in SPORTS_ACTIVE.items():
-        tipo_sport = meta.get("tipo", "soccer")
-        markets    = MARKETS_BY_SPORT.get(tipo_sport, ["h2h"])
+        tipo_sport  = meta.get("tipo", "soccer")
+        markets     = MARKETS_BY_SPORT.get(tipo_sport, ["h2h"])
         markets_str = ",".join(markets)
 
         try:
@@ -433,21 +455,15 @@ def escanear_mercado() -> dict:
                 continue
 
             remaining = r.headers.get("x-requests-remaining", "?")
-            log.info(f"{meta['nombre']}: {len(eventos)} eventos · mercados: {markets_str} · requests: {remaining}")
+            log.info(f"{meta['nombre']}: {len(eventos)} eventos · {markets_str} · requests: {remaining}")
 
             for ev in eventos:
                 total += 1
                 for market_key in markets:
-                    # Value Bets
-                    for pick in analizar_value(ev, meta, market_key):
-                        if pick.descartado:
-                            descartados.append(pick)
-                        else:
-                            value_picks.append(pick)
-
-                    # Sure Bets
-                    for sb in detectar_sure_bets(ev, meta, market_key):
-                        sure_bets.append(sb)
+                    vp, sp = analizar_evento(ev, meta, market_key)
+                    for p in vp:
+                        (descartados if p.descartado else all_value).append(p)
+                    all_sure.extend(sp)
 
             time.sleep(0.4)
 
@@ -460,47 +476,63 @@ def escanear_mercado() -> dict:
         except Exception as e:
             log.warning(f"{sport_key}: {e}")
 
-    # Ordenar value picks por gold_score
-    value_picks.sort(key=lambda p: p.gold_score, reverse=True)
+    # ── Ordenar y seleccionar ──────────────────────────────────────────────────
 
-    # Sure bets ordenadas por ROI garantizado
-    sure_bets.sort(key=lambda s: s.roi_garantizado, reverse=True)
+    # Sure Picks: ordenados por confianza del modelo (mayor prob primero)
+    all_sure.sort(key=lambda s: s.prob_modelo, reverse=True)
 
-    # Gold Tips — top N value picks con filtros de calidad
+    # Deduplicar sure picks (mismo evento + mercado puede aparecer varias veces)
+    sure_ids = set()
+    sure_dedup = []
+    for s in all_sure:
+        key = f"{s.evento}-{s.mercado}-{s.equipo_pick}"
+        if key not in sure_ids:
+            sure_ids.add(key)
+            sure_dedup.append(s)
+    all_sure = sure_dedup
+
+    # Value Picks: ordenados por gold_score
+    all_value.sort(key=lambda p: p.gold_score, reverse=True)
+
+    # Gold Tips — top N value picks con filtros
     candidatos = [
-        p for p in value_picks
+        p for p in all_value
         if p.edge >= 0.05
-        and 1.40 <= p.odds_ref <= 3.50
+        and 1.30 <= p.odds_ref <= 3.50
         and p.horas_para_inicio >= 0
     ]
     for i, p in enumerate(candidatos):
         if i < MAX_GOLD_TIPS:
             p.es_gold = True
 
-    gold_picks    = [p for p in value_picks if p.es_gold]
-    roi_gold      = round(sum(p.ganancia_pot for p in gold_picks) / BANKROLL * 100, 2) if BANKROLL else 0
-    expo_gold     = round(sum(p.stake_usd for p in gold_picks), 2)
+    gold_picks = [p for p in all_value if p.es_gold]
 
-    # Sure bets Gold — top 5 por ROI garantizado
-    sure_gold = sure_bets[:5]
-    roi_sure  = round(sum(s.ganancia_garantizada for s in sure_gold) / BANKROLL * 100, 2) if BANKROLL else 0
+    # Métricas agregadas
+    roi_gold   = round(sum(p.ganancia_pot for p in gold_picks) / BANKROLL * 100, 2) if BANKROLL else 0
+    expo_gold  = round(sum(p.stake_usd for p in gold_picks), 2)
+    roi_sure   = round(sum(s.ganancia_pot for s in all_sure[:5]) / BANKROLL * 100, 2) if BANKROLL else 0
+    expo_sure  = round(sum(s.stake_usd for s in all_sure[:5]), 2)
+
+    log.info(f"Scan completo — {len(all_value)} value picks · {len(all_sure)} sure picks (≥{MIN_SURE_PROB*100:.0f}%)")
 
     return {
         "timestamp":           datetime.now().isoformat(),
         "total_eventos":       total,
         "ventana_horas":       VENTANA_HORAS,
+        "min_sure_prob":       MIN_SURE_PROB,
 
         # Value Bets
-        "picks_validos":       [asdict(p) for p in value_picks],
+        "picks_validos":       [asdict(p) for p in all_value],
         "picks_descartados":   [asdict(p) for p in descartados],
         "gold_tips":           [asdict(p) for p in gold_picks],
         "roi_gold_potencial":  roi_gold,
         "expo_gold_usd":       expo_gold,
 
-        # Sure Bets
-        "sure_bets":           [asdict(s) for s in sure_bets],
-        "sure_gold":           [asdict(s) for s in sure_gold],
-        "roi_sure_garantizado": roi_sure,
+        # Sure Picks (alta confianza ≥ 85%)
+        "sure_bets":           [asdict(s) for s in all_sure],
+        "sure_gold":           [asdict(s) for s in all_sure[:5]],
+        "roi_sure_potencial":  roi_sure,
+        "expo_sure_usd":       expo_sure,
 
         "bankroll": BANKROLL,
     }
