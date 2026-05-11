@@ -626,6 +626,7 @@ body{background:var(--bg);background-image:radial-gradient(ellipse at 10% 30%,rg
   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
     <span id="scan-badge" class="badge b-amber">Cargando...</span>
     <span id="last-scan" style="font-size:11px;color:var(--text2)"></span>
+    <button class="btn" onclick="window.location.href='/estadisticas'">📊 Mis Stats</button>
     <button class="btn" onclick="showPerfil()">⚙ Perfil</button>
     <button class="btn" id="btn-scan" onclick="triggerScan()">↻ Escanear</button>
     <button class="btn" onclick="doLogout()">Salir</button>
@@ -857,7 +858,7 @@ function renderValueCard(p){
         <div><div class="num-label">Ganancia pot.</div><div class="num-val" style="color:var(--violet)">+${fmtUSD(p.ganancia_pot)}</div></div>
         <div><div class="num-label">ROI bankroll</div><div class="num-val" style="color:var(--teal)">${fmtPct(p.roi_diario_pct)}</div></div>
       </div>
-      <button class="btn" style="font-size:12px" onclick="marcar(this)">✓ Colocado</button>
+      <button class="btn" style="font-size:12px" onclick="marcar(this,p)">✓ Colocado</button>
     </div>`:`<div class="lock-row">🔒 Stake y ROI en Plan Premium</div>`}
   </div>`;
 }
@@ -924,7 +925,7 @@ function updateMetrics(){
   document.getElementById('m-ventana').textContent='próximas '+(DATA.ventana_horas||36)+'hs';
 }
 
-function marcar(btn){btn.textContent='✓ Colocado';btn.style.color='var(--teal)';btn.style.borderColor='var(--teal)';btn.disabled=true;}
+async function marcar(btn,pick){btn.disabled=true;btn.textContent='Guardando...';try{if(pick)await aFetch('/api/picks/colocar',{method:'POST',body:JSON.stringify(pick)});}catch(e){}btn.textContent='✓ Colocado';btn.style.color='var(--teal)';btn.style.borderColor='var(--teal)';}
 
 async function loadUser(){
   const r=await aFetch('/api/me');
@@ -989,6 +990,308 @@ async function doLogout(){
 
 loadUser().then(fetchData);
 setInterval(fetchData,300000);
+</script>
+</body>
+</html>"""
+
+# ── Endpoints historial y estadísticas ─────────────────────────────────────────
+
+@app.post("/api/picks/colocar")
+async def colocar_pick(request: Request):
+    user = await require_auth(request)
+    if not user:
+        return JSONResponse({"ok": False}, status_code=401)
+    data = await request.json()
+    from core.database import guardar_pick
+    return JSONResponse(await guardar_pick(user["id"], data))
+
+@app.post("/api/picks/{pick_id}/resultado")
+async def actualizar_resultado(pick_id: int, request: Request):
+    user = await require_auth(request)
+    if not user:
+        return JSONResponse({"ok": False}, status_code=401)
+    data = await request.json()
+    from core.database import actualizar_resultado
+    return JSONResponse(await actualizar_resultado(pick_id, user["id"], data.get("estado","")))
+
+@app.get("/api/estadisticas")
+async def get_estadisticas(request: Request):
+    user = await require_auth(request)
+    if not user:
+        return JSONResponse({"ok": False}, status_code=401)
+    from core.database import get_estadisticas
+    return JSONResponse(await get_estadisticas(user["id"]))
+
+@app.get("/estadisticas", response_class=HTMLResponse)
+async def estadisticas_page(request: Request):
+    user = await require_auth(request)
+    if not user:
+        return RedirectResponse("/login")
+    return HTMLResponse(STATS_HTML)
+
+STATS_HTML = """<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Estadísticas — InvestiaBet</title>
+<style>
+:root{
+  --bg:#080c14;--bg2:#0d1220;--bg3:#131929;--bg4:#171f2e;
+  --border:#1e2a3d;--border2:#243347;
+  --text:#e2e8f4;--text2:#7a8aaa;--text3:#3d4f6a;
+  --blue:#4f8ef7;--blue-bg:rgba(79,142,247,.1);--blue-border:rgba(79,142,247,.25);
+  --violet:#7c5ff7;--violet-bg:rgba(124,95,247,.1);--violet-border:rgba(124,95,247,.25);
+  --teal:#00d4aa;--teal-bg:rgba(0,212,170,.08);--teal-border:rgba(0,212,170,.2);
+  --green:#22c55e;--green-bg:rgba(34,197,94,.1);
+  --red:#ef4444;--red-bg:rgba(239,68,68,.1);
+  --amber:#f59e0b;--amber-bg:rgba(245,158,11,.1);
+  --radius:12px;--radius-sm:8px
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;min-height:100vh}
+.topbar{background:rgba(13,18,32,.9);backdrop-filter:blur(12px);border-bottom:1px solid var(--border);padding:13px 20px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;position:sticky;top:0;z-index:10}
+.logo{font-size:17px;font-weight:700;background:linear-gradient(135deg,var(--blue),var(--violet),var(--teal));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.btn{padding:7px 14px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg3);color:var(--text);font-size:12px;cursor:pointer}
+.btn:hover{background:var(--bg4)}
+.container{max-width:1100px;margin:0 auto;padding:20px 16px}
+.tabs{display:flex;border-bottom:1px solid var(--border);margin-bottom:20px;overflow-x:auto}
+.tab{padding:9px 18px;font-size:13px;color:var(--text2);cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap}
+.tab.active{color:var(--blue);border-bottom-color:var(--blue);font-weight:500}
+.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:20px}
+.metric{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:16px;position:relative;overflow:hidden}
+.metric::before{content:'';position:absolute;top:0;left:0;right:0;height:2px}
+.metric.m-teal::before{background:linear-gradient(90deg,var(--teal),transparent)}
+.metric.m-blue::before{background:linear-gradient(90deg,var(--blue),transparent)}
+.metric.m-violet::before{background:linear-gradient(90deg,var(--violet),transparent)}
+.metric.m-green::before{background:linear-gradient(90deg,var(--green),transparent)}
+.metric.m-red::before{background:linear-gradient(90deg,var(--red),transparent)}
+.metric-label{font-size:10px;color:var(--text2);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px}
+.metric-val{font-size:24px;font-weight:700}
+.metric-sub{font-size:10px;color:var(--text3);margin-top:3px}
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:16px}
+.card-title{font-size:14px;font-weight:600;margin-bottom:14px;color:var(--text2);display:flex;align-items:center;gap:8px}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+@media(max-width:700px){.two-col{grid-template-columns:1fr}}
+.tipo-row{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:var(--bg3);border-radius:var(--radius-sm);margin-bottom:8px}
+.tipo-label{font-size:13px;font-weight:500}
+.tipo-stats{display:flex;gap:16px;font-size:12px;color:var(--text2)}
+.tipo-stats strong{color:var(--text)}
+/* Historial table */
+.hist-table{width:100%;border-collapse:collapse;font-size:13px}
+.hist-table th{text-align:left;padding:8px 10px;color:var(--text2);font-size:11px;border-bottom:1px solid var(--border);text-transform:uppercase;letter-spacing:.3px}
+.hist-table td{padding:10px;border-bottom:1px solid var(--border);vertical-align:middle}
+.hist-table tr:last-child td{border-bottom:none}
+.hist-table tr:hover td{background:var(--bg3)}
+.badge{display:inline-flex;align-items:center;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:500}
+.b-teal{background:var(--teal-bg);color:var(--teal);border:1px solid var(--teal-border)}
+.b-violet{background:var(--violet-bg);color:var(--violet);border:1px solid var(--violet-border)}
+.b-blue{background:var(--blue-bg);color:var(--blue);border:1px solid var(--blue-border)}
+.b-green{background:var(--green-bg);color:var(--green)}
+.b-red{background:var(--red-bg);color:var(--red)}
+.b-amber{background:var(--amber-bg);color:var(--amber)}
+.b-gray{background:var(--bg3);color:var(--text2)}
+.resultado-btn{padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text2);font-size:11px;cursor:pointer;margin-right:4px}
+.resultado-btn:hover{background:var(--bg3)}
+.resultado-btn.ganado{border-color:var(--teal);color:var(--teal)}
+.resultado-btn.perdido{border-color:var(--red);color:var(--red)}
+.empty{text-align:center;padding:50px 20px;color:var(--text2)}
+.empty-icon{font-size:36px;display:block;margin-bottom:12px;opacity:.3}
+/* ROI bar */
+.roi-bar-wrap{background:var(--border);border-radius:4px;height:6px;margin-top:8px;overflow:hidden}
+.roi-bar{height:6px;border-radius:4px;transition:width .5s}
+.spin{animation:spin 1s linear infinite;display:inline-block}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo">📈 InvestiaBet — Mis Estadísticas</div>
+  <div style="display:flex;gap:8px">
+    <button class="btn" onclick="window.location.href='/'">← Dashboard</button>
+    <button class="btn" onclick="doLogout()">Salir</button>
+  </div>
+</div>
+
+<div class="container">
+  <div class="tabs">
+    <div class="tab active" onclick="showPeriodo('mes',this)">Últimos 30 días</div>
+    <div class="tab" onclick="showPeriodo('todo',this)">Todo el historial</div>
+    <div class="tab" onclick="showPeriodo('historial',this)">Detalle de picks</div>
+  </div>
+
+  <div id="panel-mes"></div>
+  <div id="panel-todo" style="display:none"></div>
+  <div id="panel-historial" style="display:none"></div>
+</div>
+
+<script>
+let DATA=null, currentPeriodo='mes';
+function getToken(){return localStorage.getItem('sb_token')||'';}
+function authH(){const t=getToken();return t?{'Authorization':'Bearer '+t,'Content-Type':'application/json'}:{'Content-Type':'application/json'};}
+async function aFetch(url,opts={}){opts.credentials='include';opts.headers={...authH(),...(opts.headers||{})};return fetch(url,opts);}
+function fmt(n,d=2){return n!=null?Number(n).toFixed(d):'—';}
+function fmtUSD(n){return n!=null?(n>=0?'+':'')+fmt(n,2):'—';}
+function fmtPct(n){return n!=null?(n>=0?'+':'')+fmt(n,1)+'%':'—';}
+function fmtDate(d){if(!d)return '—';return new Date(d).toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'});}
+
+function estadoBadge(e){
+  const m={ganado:'b-teal',perdido:'b-red',colocado:'b-amber',void:'b-gray'};
+  const l={ganado:'✓ Ganó',perdido:'✗ Perdió',colocado:'⏳ Colocado',void:'— Void'};
+  return `<span class="badge ${m[e]||'b-gray'}">${l[e]||e}</span>`;
+}
+
+function tipoBadge(tipo,gold){
+  if(gold) return '<span class="badge b-violet">⭐ Gold</span>';
+  if(tipo==='sure') return '<span class="badge b-teal">🔒 Sure</span>';
+  return '<span class="badge b-blue">📊 Value</span>';
+}
+
+function renderStats(stats){
+  if(!stats) return '<div class="empty"><span class="empty-icon">📊</span>Sin datos aún.</div>';
+  const roiColor = stats.roi>=0?'var(--teal)':'var(--red)';
+  const pnlColor = stats.pnl_total>=0?'var(--teal)':'var(--red)';
+
+  // Barra de win rate
+  const wr = stats.win_rate||0;
+  const wrColor = wr>=60?'var(--teal)':wr>=50?'var(--blue)':wr>=40?'var(--amber)':'var(--red)';
+
+  return `
+  <div class="metrics">
+    <div class="metric m-teal">
+      <div class="metric-label">Win Rate</div>
+      <div class="metric-val" style="color:${wrColor}">${fmt(stats.win_rate,1)}%</div>
+      <div class="roi-bar-wrap"><div class="roi-bar" style="width:${Math.min(wr,100)}%;background:${wrColor}"></div></div>
+      <div class="metric-sub">${stats.ganados||0} ganados / ${stats.total_resueltos||0} resueltos</div>
+    </div>
+    <div class="metric m-${stats.roi>=0?'green':'red'}">
+      <div class="metric-label">ROI real</div>
+      <div class="metric-val" style="color:${roiColor}">${fmtPct(stats.roi)}</div>
+      <div class="metric-sub">sobre inversión total</div>
+    </div>
+    <div class="metric m-${stats.pnl_total>=0?'teal':'red'}">
+      <div class="metric-label">P&L total</div>
+      <div class="metric-val" style="color:${pnlColor}">${fmtUSD(stats.pnl_total)}</div>
+      <div class="metric-sub">USD ganado/perdido</div>
+    </div>
+    <div class="metric m-blue">
+      <div class="metric-label">Total colocados</div>
+      <div class="metric-val" style="color:var(--blue)">${stats.total_colocados||0}</div>
+      <div class="metric-sub">${stats.pendientes||0} pendientes de resultado</div>
+    </div>
+    <div class="metric m-violet">
+      <div class="metric-label">Invertido</div>
+      <div class="metric-val" style="color:var(--violet)">$${fmt(stats.invertido_total,0)}</div>
+      <div class="metric-sub">USD apostado en total</div>
+    </div>
+  </div>
+
+  <div class="two-col">
+    <div class="card">
+      <div class="card-title">📊 Por tipo de pick</div>
+      ${renderTipoRow('Value Bets', stats.value_stats, 'var(--blue)')}
+      ${renderTipoRow('Sure Picks', stats.sure_stats, 'var(--teal)')}
+      ${renderTipoRow('Gold Tips', stats.gold_stats, 'var(--violet)')}
+    </div>
+    <div class="card">
+      <div class="card-title">🏆 Por deporte</div>
+      ${Object.entries(stats.por_deporte||{}).map(([dep,s])=>renderTipoRow(dep,s,'var(--text2)')).join('')||'<div style="color:var(--text2);font-size:13px">Sin datos por deporte.</div>'}
+    </div>
+  </div>`;
+}
+
+function renderTipoRow(label, s, color){
+  if(!s||s.total===0) return `<div class="tipo-row" style="opacity:.4"><div class="tipo-label" style="color:${color}">${label}</div><div class="tipo-stats"><span>Sin datos</span></div></div>`;
+  const roiColor = s.roi>=0?'var(--teal)':'var(--red)';
+  return `<div class="tipo-row">
+    <div class="tipo-label" style="color:${color}">${label}</div>
+    <div class="tipo-stats">
+      <span>${s.total} picks</span>
+      <span>Win: <strong>${fmt(s.win_rate,1)}%</strong></span>
+      <span>ROI: <strong style="color:${roiColor}">${fmtPct(s.roi)}</strong></span>
+      <span>P&L: <strong style="color:${s.pnl>=0?'var(--teal)':'var(--red)'}">${fmtUSD(s.pnl)}</strong></span>
+    </div>
+  </div>`;
+}
+
+function renderHistorial(picks){
+  if(!picks||!picks.length) return `<div class="empty"><span class="empty-icon">📋</span>No hay picks registrados aún.<br><span style="font-size:12px">Cuando hagas click en "Colocado en Stake" en el dashboard, aparecerán acá.</span></div>`;
+  return `<div class="card" style="padding:0;overflow:hidden">
+    <div style="overflow-x:auto">
+    <table class="hist-table">
+      <thead><tr>
+        <th>Fecha</th><th>Evento</th><th>Pick</th><th>Tipo</th>
+        <th>Cuota</th><th>Stake</th><th>Estado</th><th>P&L</th><th>Resultado</th>
+      </tr></thead>
+      <tbody>
+        ${picks.map(p=>`<tr>
+          <td style="color:var(--text2);font-size:11px;white-space:nowrap">${fmtDate(p.fecha_colocado)}</td>
+          <td>
+            <div style="font-weight:500;font-size:13px">${p.evento||'—'}</div>
+            <div style="font-size:10px;color:var(--text2)">${p.liga||''} ${p.mercado?'· '+p.mercado:''}</div>
+          </td>
+          <td style="font-weight:500">${p.equipo_pick||'—'}</td>
+          <td>${tipoBadge(p.tipo,p.es_gold)}</td>
+          <td style="color:var(--blue);font-weight:600">@${fmt(p.odds,2)}</td>
+          <td style="color:var(--violet)">$${fmt(p.stake_usd,2)}</td>
+          <td>${estadoBadge(p.estado)}</td>
+          <td style="font-weight:700;color:${(p.pnl||0)>=0?'var(--teal)':'var(--red)'}">
+            ${p.pnl!=null?fmtUSD(p.pnl):'—'}
+          </td>
+          <td>
+            ${p.estado==='colocado'?`
+              <button class="resultado-btn ganado" onclick="marcarResultado(${p.id},'ganado')">✓ Ganó</button>
+              <button class="resultado-btn perdido" onclick="marcarResultado(${p.id},'perdido')">✗ Perdió</button>
+              <button class="resultado-btn" onclick="marcarResultado(${p.id},'void')" style="font-size:10px">Void</button>
+            `:'—'}
+          </td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+    </div>
+  </div>`;
+}
+
+function showPeriodo(p, el){
+  currentPeriodo=p;
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  if(el) el.classList.add('active');
+  ['mes','todo','historial'].forEach(id=>{
+    document.getElementById('panel-'+id).style.display = id===p?'block':'none';
+  });
+  if(DATA) renderAll();
+}
+
+function renderAll(){
+  if(!DATA) return;
+  document.getElementById('panel-mes').innerHTML     = renderStats(DATA.mes);
+  document.getElementById('panel-todo').innerHTML    = renderStats(DATA.todo);
+  document.getElementById('panel-historial').innerHTML = renderHistorial(DATA.historial);
+}
+
+async function marcarResultado(pickId, estado){
+  const r = await aFetch(`/api/picks/${pickId}/resultado`,{
+    method:'POST', body:JSON.stringify({estado})
+  });
+  const d = await r.json();
+  if(d.ok){ await cargarDatos(); }
+  else{ alert('Error: '+d.error); }
+}
+
+async function cargarDatos(){
+  const r = await aFetch('/api/estadisticas');
+  if(r.status===401){window.location.href='/login';return;}
+  DATA = await r.json();
+  renderAll();
+}
+
+async function doLogout(){
+  await aFetch('/api/auth/logout',{method:'POST'});
+  localStorage.removeItem('sb_token');
+  window.location.href='/login';
+}
+
+cargarDatos();
 </script>
 </body>
 </html>"""
