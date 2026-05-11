@@ -67,6 +67,27 @@ async def debug_hash():
     h    = hashlib.sha256(f"{salt}{pwd}".encode()).hexdigest()
     return {"secret_key_usado": salt, "hash_admin1234": h}
 
+@app.get("/api/debug/login")
+async def debug_login():
+    import hashlib
+    from core.database import get_pool
+    salt = os.getenv("SECRET_KEY", "stakebot_salt_2025")
+    pwd  = "admin1234"
+    h    = hashlib.sha256(f"{salt}{pwd}".encode()).hexdigest()
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT id, email, password_hash, plan, activo FROM usuarios WHERE email=$1", "admin@stakebot.com")
+        if not row:
+            return {"error": "usuario no encontrado"}
+        return {
+            "email_en_db":    row["email"],
+            "hash_en_db":     row["password_hash"],
+            "hash_calculado": h,
+            "coinciden":      row["password_hash"] == h,
+            "plan":           row["plan"],
+            "activo":         row["activo"],
+        }
+
 async def require_auth(request: Request):
     token = request.cookies.get("session_token")
     if not token:
