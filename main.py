@@ -1,6 +1,6 @@
 import os, asyncio, logging
 from datetime import datetime
-from fastapi import FastAPI, BackgroundTasks, Request, Response, Cookie
+from fastapi import FastAPI, BackgroundTasks, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -56,40 +56,20 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(scanner_loop())
     yield
 
-app = FastAPI(title="Stake Gold IA", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app = FastAPI(title="InvestiaBet", lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
+                   allow_headers=["*"], allow_credentials=True)
 
-@app.get("/api/debug/hash")
-async def debug_hash():
-    import hashlib
-    salt = os.getenv("SECRET_KEY", "stakebot_salt_2025")
-    pwd  = "admin1234"
-    h    = hashlib.sha256(f"{salt}{pwd}".encode()).hexdigest()
-    return {"secret_key_usado": salt, "hash_admin1234": h}
-
-@app.get("/api/debug/login")
-async def debug_login():
-    import hashlib
-    from core.database import get_pool
-    salt = os.getenv("SECRET_KEY", "stakebot_salt_2025")
-    pwd  = "admin1234"
-    h    = hashlib.sha256(f"{salt}{pwd}".encode()).hexdigest()
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT id, email, password_hash, plan, activo FROM usuarios WHERE email=$1", "admin@stakebot.com")
-        if not row:
-            return {"error": "usuario no encontrado"}
-        return {
-            "email_en_db":    row["email"],
-            "hash_en_db":     row["password_hash"],
-            "hash_calculado": h,
-            "coinciden":      row["password_hash"] == h,
-            "plan":           row["plan"],
-            "activo":         row["activo"],
-        }
+# ── Auth ──────────────────────────────────────────────────────────────────────
 
 async def require_auth(request: Request):
+    # 1. Cookie
     token = request.cookies.get("session_token")
+    # 2. Header Authorization: Bearer <token>
+    if not token:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            token = auth[7:]
     if not token:
         return None
     from core.database import get_user_by_token
@@ -110,7 +90,7 @@ def picks_para_usuario(user: dict) -> dict:
         picks_vis = [{**p, "stake_usd": None, "ganancia_pot": None,
                       "roi_diario_pct": None, "es_gold": False} for p in todos[:3]]
         gold_vis, roi_vis, expo_vis = [], None, None
-    bankroll = user["bankroll"] if user else 1000
+    bankroll = user.get("bankroll", 1000) if user else 1000
     return {
         "timestamp":          resultado["timestamp"],
         "ultimo_scan":        cache["ultimo_scan"],
@@ -128,7 +108,39 @@ def picks_para_usuario(user: dict) -> dict:
         "picks_bloqueados":   max(0, len(todos) - 3) if plan == "free" else 0,
     }
 
-# ── Endpoints ─────────────────────────────────────────────────────────────────
+# ── API ───────────────────────────────────────────────────────────────────────
+
+@app.get("/api/debug/hash")
+async def debug_hash():
+    import hashlib
+    salt = os.getenv("SECRET_KEY", "stakebot_salt_2025")
+    pwd  = "admin1234"
+    h    = hashlib.sha256(f"{salt}{pwd}".encode()).hexdigest()
+    return {"secret_key_usado": salt, "hash_admin1234": h}
+
+@app.get("/api/debug/login")
+async def debug_login():
+    import hashlib
+    from core.database import get_pool
+    salt = os.getenv("SECRET_KEY", "stakebot_salt_2025")
+    pwd  = "admin1234"
+    h    = hashlib.sha256(f"{salt}{pwd}".encode()).hexdigest()
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT id, email, password_hash, plan, activo FROM usuarios WHERE email=$1",
+            "admin@stakebot.com"
+        )
+        if not row:
+            return {"error": "usuario no encontrado"}
+        return {
+            "email_en_db":    row["email"],
+            "hash_en_db":     row["password_hash"],
+            "hash_calculado": h,
+            "coinciden":      row["password_hash"] == h,
+            "plan":           row["plan"],
+            "activo":         row["activo"],
+        }
 
 @app.post("/api/auth/register")
 async def register(request: Request):
@@ -148,15 +160,32 @@ async def do_login(request: Request, response: Response):
     from core.database import login
     result = await login(data.get("email", ""), data.get("password", ""))
     if result["ok"]:
-        response.set_cookie("session_token", result["token"],
-                            max_age=30*24*3600, httponly=True, samesite="none", secure=True)
-        return JSONResponse({"ok": True, "plan": result["user"]["plan"],
-                             "username": result["user"]["username"]})
+        token = result["token"]
+        resp  = JSONResponse({
+            "ok":       True,
+            "plan":     result["user"]["plan"],
+            "username": result["user"]["username"],
+            "token":    token,
+        })
+        resp.set_cookie(
+            key      = "session_token",
+            value    = token,
+            max_age  = 30*24*3600,
+            httponly = False,
+            secure   = True,
+            samesite = "none",
+            path     = "/",
+        )
+        return resp
     return JSONResponse(result, status_code=401)
 
 @app.post("/api/auth/logout")
 async def do_logout(request: Request, response: Response):
     token = request.cookies.get("session_token")
+    if not token:
+        auth = request.headers.get("Authorization","")
+        if auth.startswith("Bearer "):
+            token = auth[7:]
     if token:
         from core.database import logout
         await logout(token)
@@ -238,8 +267,8 @@ async def admin_crear_invitacion(request: Request):
     data = await request.json()
     from core.database import crear_invitacion
     codigo = await crear_invitacion(
-        plan     = data.get("plan", "premium"),
-        max_usos = data.get("max_usos", 1),
+        plan       = data.get("plan", "premium"),
+        max_usos   = data.get("max_usos", 1),
         creado_por = user["id"],
     )
     return JSONResponse({"ok": True, "codigo": codigo})
@@ -251,6 +280,8 @@ async def admin_invitaciones(request: Request):
         return JSONResponse({"ok": False}, status_code=403)
     from core.database import get_invitaciones
     return JSONResponse(await get_invitaciones())
+
+# ── Pages ─────────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
@@ -270,14 +301,14 @@ async def admin_page(request: Request):
         return RedirectResponse("/login")
     return HTMLResponse(ADMIN_HTML)
 
-# ── HTML (mismo que antes) ────────────────────────────────────────────────────
+# ── HTML ──────────────────────────────────────────────────────────────────────
 
 LOGIN_HTML = """<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Stake Gold IA</title>
+<title>InvestiaBet — Acceso</title>
 <style>
 :root{--bg:#0f1117;--bg2:#1a1d27;--bg3:#22263a;--border:#2e3348;--text:#e8eaf0;--text2:#8b92a8;--gold:#f59e0b;--green:#22c55e;--red:#ef4444;--radius:12px}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -307,24 +338,24 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 <body>
 <div class="card">
   <div class="logo">
-    <div class="logo-icon">⭐</div>
-    <div class="logo-title">Stake Gold IA</div>
-    <div class="logo-sub">Señales profesionales · Stake.com</div>
+    <div class="logo-icon">📈</div>
+    <div class="logo-title">InvestiaBet</div>
+    <div class="logo-sub">Inversión inteligente en deportes</div>
   </div>
   <div class="tabs">
     <div class="tab active" onclick="showTab('login')">Ingresar</div>
     <div class="tab" onclick="showTab('register')">Registrarse</div>
   </div>
   <div id="form-login">
-    <div class="field"><label>Email</label><input type="email" id="l-email" placeholder="tu@email.com"></div>
-    <div class="field"><label>Contraseña</label><input type="password" id="l-pass" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()"></div>
+    <div class="field"><label>Email</label><input type="email" id="l-email" placeholder="tu@email.com" autocomplete="email"></div>
+    <div class="field"><label>Contraseña</label><input type="password" id="l-pass" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()"></div>
     <button class="btn" onclick="doLogin()" id="btn-login">Ingresar</button>
     <div id="login-msg"></div>
   </div>
   <div id="form-register" class="hidden">
     <div class="plan-info">
       <strong>Gratis:</strong> 3 señales/día.<br>
-      <strong>Premium ($15,000 ARS/mes):</strong> Gold Tips + Telegram + ROI completo.<br>
+      <strong>Premium:</strong> Gold Tips + Telegram + ROI completo.<br>
       Con código de invitación accedés directo a Premium.
     </div>
     <div class="field"><label>Email</label><input type="email" id="r-email" placeholder="tu@email.com"></div>
@@ -344,23 +375,48 @@ function showTab(t){
 async function doLogin(){
   const btn=document.getElementById('btn-login');
   btn.disabled=true;btn.textContent='Ingresando...';
-  const r=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({email:document.getElementById('l-email').value,password:document.getElementById('l-pass').value})});
-  const d=await r.json();
+  try{
+    const r=await fetch('/api/auth/login',{
+      method:'POST',
+      credentials:'include',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        email:document.getElementById('l-email').value.trim().toLowerCase(),
+        password:document.getElementById('l-pass').value
+      })
+    });
+    const d=await r.json();
+    if(d.ok){
+      if(d.token) localStorage.setItem('sb_token',d.token);
+      window.location.href=d.plan==='admin'?'/admin':'/';
+    } else {
+      const el=document.getElementById('login-msg');
+      el.className='msg msg-err';
+      el.textContent=d.error||'Email o contraseña incorrectos';
+    }
+  }catch(e){
+    document.getElementById('login-msg').className='msg msg-err';
+    document.getElementById('login-msg').textContent='Error de conexión';
+  }
   btn.disabled=false;btn.textContent='Ingresar';
-  if(d.ok){window.location.href=d.plan==='admin'?'/admin':'/';}
-  else{const el=document.getElementById('login-msg');el.className='msg msg-err';el.textContent=d.error||'Error al ingresar';}
 }
 async function doRegister(){
   const btn=document.getElementById('btn-register');
   btn.disabled=true;btn.textContent='Creando cuenta...';
-  const r=await fetch('/api/auth/register',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({email:document.getElementById('r-email').value,username:document.getElementById('r-user').value,
-      password:document.getElementById('r-pass').value,codigo:document.getElementById('r-code').value.toUpperCase()})});
+  const r=await fetch('/api/auth/register',{
+    method:'POST',credentials:'include',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      email:document.getElementById('r-email').value.trim(),
+      username:document.getElementById('r-user').value.trim(),
+      password:document.getElementById('r-pass').value,
+      codigo:document.getElementById('r-code').value.toUpperCase().trim()
+    })
+  });
   const d=await r.json();
   btn.disabled=false;btn.textContent='Crear cuenta';
   const el=document.getElementById('register-msg');
-  if(d.ok){el.className='msg msg-ok';el.textContent=`Cuenta creada (plan ${d.plan}). Iniciá sesión.`;setTimeout(()=>showTab('login'),2000);}
+  if(d.ok){el.className='msg msg-ok';el.textContent='Cuenta creada (plan '+d.plan+'). Iniciá sesión.';setTimeout(()=>showTab('login'),2000);}
   else{el.className='msg msg-err';el.textContent=d.error||'Error al registrar';}
 }
 </script>
@@ -371,7 +427,7 @@ ADMIN_HTML = """<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Admin — Stake Gold IA</title>
+<title>Admin — InvestiaBet</title>
 <style>
 :root{--bg:#0f1117;--bg2:#1a1d27;--bg3:#22263a;--border:#2e3348;--text:#e8eaf0;--text2:#8b92a8;--gold:#f59e0b;--green:#22c55e;--red:#ef4444;--radius:10px}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -404,7 +460,7 @@ select,input{padding:7px 10px;border-radius:6px;border:1px solid var(--border);b
 </head>
 <body>
 <div class="topbar">
-  <div class="logo">⭐ Stake Gold IA — Panel Admin</div>
+  <div class="logo">📈 InvestiaBet — Panel Admin</div>
   <div style="display:flex;gap:8px">
     <button class="btn" onclick="window.location.href='/'">Dashboard</button>
     <button class="btn" onclick="doLogout()">Salir</button>
@@ -442,40 +498,48 @@ select,input{padding:7px 10px;border-radius:6px;border:1px solid var(--border);b
   </div>
 </div>
 <script>
+function getToken(){return localStorage.getItem('sb_token')||'';}
+function authH(){const t=getToken();return t?{'Authorization':'Bearer '+t,'Content-Type':'application/json'}:{'Content-Type':'application/json'};}
 async function cargarDatos(){
-  const[ru,ri]=await Promise.all([fetch('/api/admin/usuarios').then(r=>r.json()),fetch('/api/admin/invitaciones').then(r=>r.json())]);
-  const usuarios=Array.isArray(ru)?ru:[];const invs=Array.isArray(ri)?ri:[];
-  document.getElementById('m-total').textContent=usuarios.length;
-  document.getElementById('m-premium').textContent=usuarios.filter(u=>u.plan==='premium').length;
-  document.getElementById('m-free').textContent=usuarios.filter(u=>u.plan==='free').length;
-  document.getElementById('m-inv').textContent=invs.filter(i=>i.usado).length+'/'+invs.length;
-  document.getElementById('tabla-usuarios').innerHTML=usuarios.map(u=>`<tr>
-    <td><strong>${u.username}</strong></td>
-    <td style="color:var(--text2);font-size:12px">${u.email}</td>
-    <td><span class="badge ${u.plan==='premium'?'b-gold':u.plan==='admin'?'b-green':'b-gray'}">${u.plan}</span></td>
-    <td>$${u.bankroll||1000} ${u.moneda||'USD'}</td>
-    <td>${u.tg_activo?'<span class="badge b-green">✓</span>':'—'}</td>
-    <td style="font-size:11px;color:var(--text2)">${u.fecha_registro?String(u.fecha_registro).substring(0,10):''}</td>
-    <td style="display:flex;gap:6px;flex-wrap:wrap">
-      <select onchange="cambiarPlan(${u.id},this.value)" style="font-size:11px;padding:4px 6px">
-        <option ${u.plan==='free'?'selected':''} value="free">Free</option>
-        <option ${u.plan==='premium'?'selected':''} value="premium">Premium</option>
-        <option ${u.plan==='admin'?'selected':''} value="admin">Admin</option>
-      </select>
-      <button class="btn" style="font-size:11px;padding:4px 10px;color:${u.activo?'var(--red)':'var(--green)'}"
-        onclick="toggleActivo(${u.id},${!u.activo})">${u.activo?'Desactivar':'Activar'}</button>
-    </td></tr>`).join('');
-  document.getElementById('tabla-invitaciones').innerHTML=invs.map(i=>`<tr>
-    <td><code style="color:var(--gold)">${i.codigo}</code></td>
-    <td><span class="badge ${i.plan==='premium'?'b-gold':'b-gray'}">${i.plan}</span></td>
-    <td>${i.usos_actuales}/${i.max_usos}</td>
-    <td>${i.usado?'<span class="badge b-gray">Agotado</span>':'<span class="badge b-green">Disponible</span>'}</td>
-    <td style="font-size:11px;color:var(--text2)">${i.fecha_creacion?String(i.fecha_creacion).substring(0,10):''}</td>
-  </tr>`).join('');
+  try{
+    const[ru,ri]=await Promise.all([
+      fetch('/api/admin/usuarios',{credentials:'include',headers:authH()}).then(r=>r.json()),
+      fetch('/api/admin/invitaciones',{credentials:'include',headers:authH()}).then(r=>r.json())
+    ]);
+    const usuarios=Array.isArray(ru)?ru:[];
+    const invs=Array.isArray(ri)?ri:[];
+    document.getElementById('m-total').textContent=usuarios.length;
+    document.getElementById('m-premium').textContent=usuarios.filter(u=>u.plan==='premium').length;
+    document.getElementById('m-free').textContent=usuarios.filter(u=>u.plan==='free').length;
+    document.getElementById('m-inv').textContent=invs.filter(i=>i.usado).length+'/'+invs.length;
+    document.getElementById('tabla-usuarios').innerHTML=usuarios.map(u=>`<tr>
+      <td><strong>${u.username}</strong></td>
+      <td style="color:var(--text2);font-size:12px">${u.email}</td>
+      <td><span class="badge ${u.plan==='premium'?'b-gold':u.plan==='admin'?'b-green':'b-gray'}">${u.plan}</span></td>
+      <td>$${u.bankroll||1000} ${u.moneda||'USD'}</td>
+      <td>${u.tg_activo?'<span class="badge b-green">✓</span>':'—'}</td>
+      <td style="font-size:11px;color:var(--text2)">${u.fecha_registro?String(u.fecha_registro).substring(0,10):''}</td>
+      <td style="display:flex;gap:6px;flex-wrap:wrap">
+        <select onchange="cambiarPlan(${u.id},this.value)" style="font-size:11px;padding:4px 6px">
+          <option ${u.plan==='free'?'selected':''} value="free">Free</option>
+          <option ${u.plan==='premium'?'selected':''} value="premium">Premium</option>
+          <option ${u.plan==='admin'?'selected':''} value="admin">Admin</option>
+        </select>
+        <button class="btn" style="font-size:11px;padding:4px 10px;color:${u.activo?'var(--red)':'var(--green)'}"
+          onclick="toggleActivo(${u.id},${!u.activo})">${u.activo?'Desactivar':'Activar'}</button>
+      </td></tr>`).join('');
+    document.getElementById('tabla-invitaciones').innerHTML=invs.map(i=>`<tr>
+      <td><code style="color:var(--gold)">${i.codigo}</code></td>
+      <td><span class="badge ${i.plan==='premium'?'b-gold':'b-gray'}">${i.plan}</span></td>
+      <td>${i.usos_actuales}/${i.max_usos}</td>
+      <td>${i.usado?'<span class="badge b-gray">Agotado</span>':'<span class="badge b-green">Disponible</span>'}</td>
+      <td style="font-size:11px;color:var(--text2)">${i.fecha_creacion?String(i.fecha_creacion).substring(0,10):''}</td>
+    </tr>`).join('');
+  }catch(e){console.error(e);}
 }
 async function generarInvitacion(){
-  const r=await fetch('/api/admin/invitacion',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({plan:document.getElementById('inv-plan').value,max_usos:parseInt(document.getElementById('inv-usos').value)||1})});
+  const r=await fetch('/api/admin/invitacion',{method:'POST',credentials:'include',
+    headers:authH(),body:JSON.stringify({plan:document.getElementById('inv-plan').value,max_usos:parseInt(document.getElementById('inv-usos').value)||1})});
   const d=await r.json();
   if(d.ok){
     document.getElementById('inv-result').innerHTML=`<div class="inv-box">
@@ -486,10 +550,21 @@ async function generarInvitacion(){
     cargarDatos();
   }
 }
-async function cambiarPlan(id,plan){await fetch('/api/admin/usuario/'+id+'/plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plan})});cargarDatos();}
-async function toggleActivo(id,activo){await fetch('/api/admin/usuario/'+id+'/activo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({activo})});cargarDatos();}
-async function doLogout(){await fetch('/api/auth/logout',{method:'POST'});window.location.href='/login';}
-cargarDatos();setInterval(cargarDatos,30000);
+async function cambiarPlan(id,plan){
+  await fetch('/api/admin/usuario/'+id+'/plan',{method:'POST',credentials:'include',headers:authH(),body:JSON.stringify({plan})});
+  cargarDatos();
+}
+async function toggleActivo(id,activo){
+  await fetch('/api/admin/usuario/'+id+'/activo',{method:'POST',credentials:'include',headers:authH(),body:JSON.stringify({activo})});
+  cargarDatos();
+}
+async function doLogout(){
+  await fetch('/api/auth/logout',{method:'POST',credentials:'include',headers:authH()});
+  localStorage.removeItem('sb_token');
+  window.location.href='/login';
+}
+cargarDatos();
+setInterval(cargarDatos,30000);
 </script>
 </body>
 </html>"""
@@ -498,7 +573,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Stake Gold IA</title>
+<title>InvestiaBet</title>
 <style>
 :root{--bg:#0f1117;--bg2:#1a1d27;--bg3:#22263a;--border:#2e3348;--text:#e8eaf0;--text2:#8b92a8;--text3:#555e7a;--green:#22c55e;--green-bg:rgba(34,197,94,.12);--red:#ef4444;--red-bg:rgba(239,68,68,.12);--amber:#f59e0b;--amber-bg:rgba(245,158,11,.12);--purple:#8b5cf6;--purple-bg:rgba(139,92,246,.12);--gold:#f59e0b;--gold-bg:rgba(245,158,11,.12);--radius:10px}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -560,7 +635,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 </head>
 <body>
 <div class="topbar">
-  <div class="logo"><div class="logo-dot" id="conn-dot"></div>⭐ Stake Gold IA<span id="plan-badge" class="badge b-gray" style="margin-left:4px">—</span></div>
+  <div class="logo"><div class="logo-dot" id="conn-dot"></div>📈 InvestiaBet<span id="plan-badge" class="badge b-gray" style="margin-left:4px">—</span></div>
   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
     <span id="scan-badge" class="badge b-amber">Cargando...</span>
     <span id="last-scan" style="font-size:11px;color:var(--text2)"></span>
@@ -573,7 +648,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
   <div class="freemium-banner" id="freemium-banner" style="display:none">
     <div>
       <div style="font-weight:600;margin-bottom:3px">Plan gratuito — 3 señales/día</div>
-      <div style="font-size:12px;color:var(--text2)">Activá Premium para Gold Tips, ROI detallado y alertas por Telegram.</div>
+      <div style="font-size:12px;color:var(--text2)">Activá Premium para Gold Tips, ROI y alertas por Telegram.</div>
     </div>
     <button style="padding:8px 16px;background:var(--gold);border:none;border-radius:8px;color:#000;font-size:13px;font-weight:600;cursor:pointer">⭐ Activar Premium</button>
   </div>
@@ -588,7 +663,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
   <div class="gold-section" id="gold-section" style="display:none">
     <div class="gold-title">
       <span>⭐ Gold Tips del día</span>
-      <span style="font-size:12px;color:var(--text2)">ROI potencial: <strong id="gold-roi-val" style="color:var(--green)">—</strong> · Expo: <strong id="gold-expo-val">—</strong></span>
+      <span style="font-size:12px;color:var(--text2)">ROI pot: <strong id="gold-roi-val" style="color:var(--green)">—</strong> · Expo: <strong id="gold-expo-val">—</strong></span>
     </div>
     <div id="gold-lista"></div>
   </div>
@@ -638,16 +713,19 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 </div>
 <script>
 let DATA=null,USER=null,currentFilter='todos',currentTab='validos';
+function getToken(){return localStorage.getItem('sb_token')||'';}
+function authH(){const t=getToken();return t?{'Authorization':'Bearer '+t,'Content-Type':'application/json'}:{'Content-Type':'application/json'};}
+async function aFetch(url,opts={}){opts.credentials='include';opts.headers={...authH(),...(opts.headers||{})};return fetch(url,opts);}
 function fmt(n,d=2){return n!=null?Number(n).toFixed(d):'—';}
 function fmtUSD(n){return n!=null?'$'+fmt(n,2):'—';}
 function fmtPct(n){return n!=null?(n>=0?'+':'')+fmt(n,1)+'%':'—';}
 function edgeColor(e){return e>=0.10?'#8b5cf6':e>=0.06?'#22c55e':'#8b92a8';}
 function ctxTag(id){const m={champion_early:['ctx-warn','⚠ Campeón'],relegated:['ctx-warn','⬇ Desc.'],esport:['ctx-esport','🎮 Esport'],clean:['ctx-clean','✓ OK']};const[cls,lbl]=m[id]||['ctx-warn',id];return `<span class="ctx-tag ${cls}">${lbl}</span>`;}
 async function loadUser(){
-  const r=await fetch('/api/me');
+  const r=await aFetch('/api/me');
   if(!r.ok){window.location.href='/login';return;}
   USER=await r.json();
-  const pl={'free':'Plan Gratuito','premium':'Plan Premium','admin':'Admin'};
+  const pl={'free':'Gratuito','premium':'Premium','admin':'Admin'};
   const pc={'free':'b-gray','premium':'b-gold','admin':'b-green'};
   document.getElementById('plan-badge').textContent=pl[USER.plan]||USER.plan;
   document.getElementById('plan-badge').className='badge '+(pc[USER.plan]||'b-gray');
@@ -691,12 +769,12 @@ function renderPickCard(p){
     <div style="text-align:right"><div style="font-size:22px;font-weight:700;color:${col}">${p.edge>=0?'+':''}${(p.edge*100).toFixed(1)}%</div><div style="font-size:10px;color:var(--text2)">edge</div>${isPrem?`<div style="font-size:11px;color:var(--green);margin-top:2px">ROI ${fmtPct(p.roi_diario_pct)}</div>`:''}</div>
   </div>
   <div class="bar-wrap"><div class="bar-fill" style="width:${barW}%;background:${col}"></div></div>
-  <div class="bar-labels"><span>Prob. mercado: ${(p.prob_ajustada*100).toFixed(1)}%</span><span>Implícita: ${(1/p.odds_stake*100).toFixed(1)}%</span></div>
+  <div class="bar-labels"><span>Prob: ${(p.prob_ajustada*100).toFixed(1)}%</span><span>Implícita: ${(1/p.odds_stake*100).toFixed(1)}%</span></div>
   ${isPrem?`<div class="pick-bottom"><div class="pick-nums">
     <div><div class="num-label">Stake</div><div class="num-val">${fmtUSD(p.stake_usd)}</div></div>
     <div><div class="num-label">Ganancia pot.</div><div class="num-val" style="color:var(--green)">+${fmtUSD(p.ganancia_pot)}</div></div>
     <div><div class="num-label">ROI</div><div class="num-val" style="color:var(--green)">${fmtPct(p.roi_diario_pct)}</div></div>
-  </div><button class="btn" onclick="marcar(this)">✓ Colocado</button></div>`:`<div style="padding-top:8px;border-top:1px solid var(--border);font-size:12px;color:var(--text3)">🔒 Stake y ROI disponibles en Plan Premium</div>`}
+  </div><button class="btn" onclick="marcar(this)">✓ Colocado</button></div>`:`<div style="padding-top:8px;border-top:1px solid var(--border);font-size:12px;color:var(--text3)">🔒 Stake y ROI en Plan Premium</div>`}
   </div>`;
 }
 function renderGold(){
@@ -746,14 +824,15 @@ function showPerfil(){document.getElementById('modal-perfil').style.display='fle
 function hidePerfil(){document.getElementById('modal-perfil').style.display='none';}
 async function guardarPerfil(){
   const data={bankroll:parseFloat(document.getElementById('p-bankroll').value)||1000,perfil_riesgo:document.getElementById('p-riesgo').value,tg_chat_id:document.getElementById('p-tgid').value.trim(),tg_activo:document.getElementById('p-tgactivo').checked};
-  const r=await fetch('/api/me/perfil',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+  const r=await aFetch('/api/me/perfil',{method:'POST',body:JSON.stringify(data)});
   const d=await r.json();const msg=document.getElementById('perfil-msg');
   if(d.ok){msg.textContent='✓ Perfil guardado';USER={...USER,...data};setTimeout(hidePerfil,1500);fetchData();}
   else{msg.style.color='var(--red)';msg.textContent=d.error||'Error al guardar';}
 }
 async function fetchData(){
   try{
-    const r=await fetch('/api/picks');if(r.status===401){window.location.href='/login';return;}
+    const r=await aFetch('/api/picks');
+    if(r.status===401){window.location.href='/login';return;}
     const d=await r.json();
     if(d.scanning&&!d.picks_validos){document.getElementById('lista-validos').innerHTML='<div class="empty"><div class="spin" style="font-size:24px;display:block;margin-bottom:8px">↻</div>Analizando mercados...</div>';setTimeout(fetchData,5000);return;}
     DATA=d;
@@ -763,9 +842,10 @@ async function fetchData(){
     updateMetrics();renderGold();renderPicks();if(currentTab==='descartados')renderDescartados();
   }catch(e){setTimeout(fetchData,8000);}
 }
-async function triggerScan(){const btn=document.getElementById('btn-scan');btn.disabled=true;btn.textContent='↻ Escaneando...';await fetch('/api/scan',{method:'POST'});setTimeout(()=>{btn.disabled=false;btn.textContent='↻ Escanear';fetchData();},3000);}
-async function doLogout(){await fetch('/api/auth/logout',{method:'POST'});window.location.href='/login';}
-loadUser().then(fetchData);setInterval(fetchData,300000);
+async function triggerScan(){const btn=document.getElementById('btn-scan');btn.disabled=true;btn.textContent='↻ Escaneando...';await aFetch('/api/scan',{method:'POST'});setTimeout(()=>{btn.disabled=false;btn.textContent='↻ Escanear';fetchData();},3000);}
+async function doLogout(){await aFetch('/api/auth/logout',{method:'POST'});localStorage.removeItem('sb_token');window.location.href='/login';}
+loadUser().then(fetchData);
+setInterval(fetchData,300000);
 </script>
 </body>
 </html>"""
