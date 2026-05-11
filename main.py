@@ -149,7 +149,7 @@ async def do_login(request: Request, response: Response):
     result = await login(data.get("email", ""), data.get("password", ""))
     if result["ok"]:
         response.set_cookie("session_token", result["token"],
-                            max_age=30*24*3600, httponly=True, samesite="lax")
+                            max_age=30*24*3600, httponly=True, samesite="none", secure=True)
         return JSONResponse({"ok": True, "plan": result["user"]["plan"],
                              "username": result["user"]["username"]})
     return JSONResponse(result, status_code=401)
