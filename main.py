@@ -59,6 +59,14 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Stake Gold IA", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+@app.get("/api/debug/hash")
+async def debug_hash():
+    import hashlib
+    salt = os.getenv("SECRET_KEY", "stakebot_salt_2025")
+    pwd  = "admin1234"
+    h    = hashlib.sha256(f"{salt}{pwd}".encode()).hexdigest()
+    return {"secret_key_usado": salt, "hash_admin1234": h}
+
 async def require_auth(request: Request):
     token = request.cookies.get("session_token")
     if not token:
