@@ -1,5 +1,6 @@
 import os, hashlib, secrets, logging
 import asyncpg
+from datetime import datetime
 from typing import Optional
 
 log = logging.getLogger("stakebot.db")
@@ -386,6 +387,73 @@ async def get_estadisticas(user_id: int) -> dict:
             "historial":      [serialize_row(dict(r)) for r in todos[:100]],
             "bankroll_hist":  [serialize_row(dict(r)) for r in bankroll_hist],
         }
+
+async def guardar_pick_manual(user_id: int, data: dict) -> dict:
+    """Guarda un pick colocado manualmente (retroactivo)."""
+    import secrets as sec
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        user = await conn.fetchrow("SELECT bankroll FROM usuarios WHERE id=$1", user_id)
+        bankroll_antes = float(user["bankroll"]) if user else 0
+
+        estado      = data.get("estado", "pendiente")
+        odds_real   = float(data.get("odds_real") or 0)
+        stake       = float(data.get("stake_usd") or 0)
+        es_cashout  = estado == "cashout"
+        odds_co     = float(data.get("odds_cashout") or 0)
+
+        if estado == "ganado":
+            pnl = round(stake * (odds_real - 1), 2)
+        elif estado == "perdido":
+            pnl = -round(stake, 2)
+        elif estado == "cashout" and odds_co > 0:
+            pnl = round(stake * (odds_co - 1), 2)
+        elif estado == "void":
+            pnl = 0.0
+        else:
+            pnl = None
+
+        bankroll_despues = round(bankroll_antes + (pnl or 0), 2) if pnl is not None else None
+
+        pick_id = f"manual-{sec.token_hex(6)}"
+        try:
+            await conn.execute("""
+                INSERT INTO historial_picks
+                    (usuario_id, pick_id, evento, liga, deporte, mercado,
+                     equipo_pick, odds_ref, odds_real, odds_cashout, stake_usd,
+                     tipo, es_gold, estado, es_cashout, pnl,
+                     bankroll_antes, bankroll_despues, fecha_colocado, fecha_resultado)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+            """,
+                user_id, pick_id,
+                data.get("evento",""),
+                data.get("liga",""),
+                data.get("deporte","Otro"),
+                data.get("mercado","Manual"),
+                data.get("equipo_pick",""),
+                odds_real, odds_real,
+                odds_co if es_cashout else None,
+                stake,
+                data.get("tipo","value"),
+                bool(data.get("es_gold", False)),
+                estado, es_cashout, pnl,
+                bankroll_antes, bankroll_despues,
+                data.get("fecha_colocado") or datetime.now(),
+                datetime.now() if pnl is not None else None,
+            )
+
+            # Actualizar bankroll si hay resultado
+            if bankroll_despues is not None:
+                await conn.execute("UPDATE usuarios SET bankroll=$1 WHERE id=$2", bankroll_despues, user_id)
+                await conn.execute(
+                    "INSERT INTO bankroll_historial (usuario_id,monto,tipo,descripcion) VALUES ($1,$2,$3,$4)",
+                    user_id, pnl, "pick_manual", f"{data.get('evento','')} — {estado}"
+                )
+
+            return {"ok": True, "pnl": pnl, "bankroll_nuevo": bankroll_despues}
+        except Exception as e:
+            log.error(f"Error guardar_pick_manual: {e}")
+            return {"ok": False, "error": str(e)}
 
 # ── Admin ──────────────────────────────────────────────────────────────────────
 
