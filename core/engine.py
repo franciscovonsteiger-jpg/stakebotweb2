@@ -39,13 +39,17 @@ SPORTS_ACTIVE = {
     "soccer_netherlands_eredivisie": {"nombre": "Eredivisie",      "deporte": "Fútbol", "tipo": "soccer"},
     "soccer_portugal_primeira_liga": {"nombre": "Primeira Liga",   "deporte": "Fútbol", "tipo": "soccer"},
     # ── Fútbol Sudamérica (horario conveniente Argentina) ───────────────────────
-    "soccer_conmebol_copa_libertadores": {"nombre": "Copa Libertadores", "deporte": "Fútbol", "tipo": "soccer"},
-    "soccer_conmebol_copa_sudamericana": {"nombre": "Copa Sudamericana",  "deporte": "Fútbol", "tipo": "soccer"},
-    "soccer_argentina_primera_division": {"nombre": "Liga Argentina",     "deporte": "Fútbol", "tipo": "soccer"},
-    "soccer_brazil_campeonato":          {"nombre": "Brasileirão",        "deporte": "Fútbol", "tipo": "soccer"},
-    "soccer_chile_campeonato":           {"nombre": "Primera Chile",      "deporte": "Fútbol", "tipo": "soccer"},
-    "soccer_mexico_ligamx":              {"nombre": "Liga MX",            "deporte": "Fútbol", "tipo": "soccer"},
-    "soccer_usa_mls":                    {"nombre": "MLS",                "deporte": "Fútbol", "tipo": "soccer"},
+    "soccer_conmebol_copa_libertadores":     {"nombre": "Copa Libertadores", "deporte": "Fútbol", "tipo": "soccer"},
+    "soccer_conmebol_copa_sudamericana":     {"nombre": "Copa Sudamericana",  "deporte": "Fútbol", "tipo": "soccer"},
+    "soccer_argentina_primera_division":     {"nombre": "Liga Argentina",     "deporte": "Fútbol", "tipo": "soccer"},
+    "soccer_brazil_campeonato":              {"nombre": "Brasileirão",        "deporte": "Fútbol", "tipo": "soccer"},
+    "soccer_chile_primera_division":         {"nombre": "Primera Chile",      "deporte": "Fútbol", "tipo": "soccer"},
+    "soccer_mexico_ligamx":                  {"nombre": "Liga MX",            "deporte": "Fútbol", "tipo": "soccer"},
+    "soccer_usa_mls":                        {"nombre": "MLS",                "deporte": "Fútbol", "tipo": "soccer"},
+    "soccer_brazil_serie_b":                 {"nombre": "Brasileirão B",      "deporte": "Fútbol", "tipo": "soccer"},
+    "soccer_colombia_primera_a":             {"nombre": "Liga Colombia",      "deporte": "Fútbol", "tipo": "soccer"},
+    "soccer_peru_primera_division":          {"nombre": "Liga Perú",          "deporte": "Fútbol", "tipo": "soccer"},
+    "soccer_uruguay_primera_division":       {"nombre": "Liga Uruguay",       "deporte": "Fútbol", "tipo": "soccer"},
     # ── Tenis ───────────────────────────────────────────────────────────────────
     "tennis_atp_french_open":    {"nombre": "ATP Roland Garros",   "deporte": "Tenis",  "tipo": "tennis"},
     "tennis_wta_french_open":    {"nombre": "WTA Roland Garros",   "deporte": "Tenis",  "tipo": "tennis"},
@@ -285,7 +289,9 @@ def _analizar(ev, meta, market_key, es_vivo=False):
         stake   = kelly_stake(p_mod, mejor, kf, msp)
         gan     = round(stake * (mejor - 1), 2)
         gscore  = gold_score_fn(p_mod, mejor, edge, horas)
-        anomalo = edge > 0.40
+        # Límite más permisivo para spreads béisbol con cuotas altas
+        limite = 0.55 if market_key in ("spreads","sets") and mejor_odds > 2.80 else 0.40
+        anomalo = edge > limite
 
         desc  = ctx.get("descartar",False) or edge < min_edge_ok or anomalo or mejor < 1.10
         razon = None
