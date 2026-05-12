@@ -968,7 +968,7 @@ function fmt(n,d=2){return n!=null?Number(n).toFixed(d):'—';}
 let _ratio = 1;
 function fmtMiles(n){
   if(n==null||n===undefined) return '—';
-  return Math.round(n * _ratio).toLocaleString('es-AR');
+  return Math.round(n).toLocaleString('es-AR');
 }
 function fmtMilesRaw(n){
   if(n==null||n===undefined) return '—';
@@ -1161,7 +1161,14 @@ function renderAll(){
   const mon = DATA.moneda||'USD';
   _ratio = DATA.ratio || 1;
   document.getElementById('bankroll-val').textContent=fmtMilesRaw(DATA.bankroll);
-  document.getElementById('moneda-val').textContent=mon+' (ratio: '+(_ratio).toFixed(0)+'x)';
+  const enJuego = DATA.mes?.invertido_pendiente || DATA.todo?.invertido_pendiente || 0;
+  const disponible = DATA.bankroll - enJuego;
+  document.getElementById('moneda-val').innerHTML=
+    mon +
+    (enJuego > 0
+      ? ' &nbsp;·&nbsp; <span style="color:var(--amber)">En juego: '+Math.round(enJuego).toLocaleString('es-AR')+'</span>' +
+        ' &nbsp;·&nbsp; <span style="color:var(--teal)">Disponible: '+Math.round(disponible).toLocaleString('es-AR')+'</span>'
+      : '');
   // Pendientes
   const pends = DATA.pendientes||[];
   const psec  = document.getElementById('pendientes-section');
