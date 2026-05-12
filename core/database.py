@@ -371,8 +371,16 @@ async def get_estadisticas(user_id: int) -> dict:
             pnl_total      = sum(p["pnl"] or 0 for p in resueltos)
             invertido_res  = sum(p["stake_usd"] or 0 for p in resueltos)
             invertido_pend = sum(p["stake_usd"] or 0 for p in pendientes)
-            roi            = round(pnl_total / invertido_res * 100, 2) if invertido_res > 0 else 0
-            win_rate       = round(len(ganados) / len(resueltos) * 100, 1) if resueltos else 0
+            # ROI sobre bankroll inicial (primer pick registrado)
+            bankroll_inicial = None
+            for p in sorted(picks, key=lambda x: x["fecha_colocado"] or ""):
+                if p.get("bankroll_antes") is not None:
+                    bankroll_inicial = float(p["bankroll_antes"])
+                    break
+            if not bankroll_inicial:
+                bankroll_inicial = invertido_res if invertido_res > 0 else 1
+            roi      = round(pnl_total / bankroll_inicial * 100, 2) if bankroll_inicial > 0 else 0
+            win_rate = round(len(ganados) / len(resueltos) * 100, 1) if resueltos else 0
 
             def tipo_stats(lista):
                 if not lista: return {"total":0,"ganados":0,"win_rate":0,"pnl":0,"roi":0}
