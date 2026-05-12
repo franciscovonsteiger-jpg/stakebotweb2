@@ -1729,6 +1729,30 @@ function renderVivoCard(p){
   </div>`;
 }
 
+async function marcarYaColocados(){
+  try{
+    const r=await aFetch('/api/estadisticas');
+    if(!r.ok) return;
+    const stats=await r.json();
+    const pendientes=(stats.pendientes||[]).concat(stats.historial||[]);
+    const idsColocados=new Set(pendientes.map(p=>p.pick_id));
+    document.querySelectorAll('.btn').forEach(btn=>{
+      if(btn.textContent.includes('Colocar') || btn.textContent.includes('Colocado')){
+        const idx=btn.getAttribute('onclick')?.match(/\d+/)?.[0];
+        if(idx!=null){
+          const pick=window._picks[idx];
+          if(pick && idsColocados.has(pick.id)){
+            btn.textContent='✓ Colocado en Stake';
+            btn.style.color='var(--teal)';
+            btn.style.borderColor='var(--teal)';
+            btn.disabled=true;
+          }
+        }
+      }
+    });
+  }catch(e){}
+}
+
 async function colocarPick(btn,pickId){
   const pick=window._picks[pickId] || window._picks[String(pickId)];
   if(!pick){
