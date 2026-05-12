@@ -1687,7 +1687,7 @@ function renderValueCard(p){
         <div><div class="num-label">Ganancia pot.</div><div class="num-val" style="color:var(--violet)">+${fmtUSD(p.ganancia_pot)}</div></div>
         <div><div class="num-label">ROI</div><div class="num-val" style="color:var(--teal)">${fmtPct(p.roi_diario_pct)}</div></div>
       </div>
-      <button class="btn" style="font-size:12px" onclick="colocarPick(this,${_pidxStr})">✓ Colocado en Stake</button>
+      <button class="btn" style="font-size:12px" onclick="colocarPick(this,${_pidxStr})" class="btn btn-colocar" style="font-size:12px">Colocar en Stake →</button>
     </div>`:`<div class="lock-row">🔒 Stake y ROI en Plan Premium</div>`}
   </div>`;
 }
@@ -1744,21 +1744,22 @@ function marcarYaColocados(){
   if(!colocados.size) return;
   document.querySelectorAll('[data-pick-id]').forEach(btn=>{
     if(colocados.has(btn.getAttribute('data-pick-id'))){
-      btn.textContent='✓ Colocado en Stake';
+      btn.textContent='✓ Ya colocado';
       btn.style.color='var(--teal)';
       btn.style.borderColor='var(--teal)';
       btn.disabled=true;
     }
   });
-  // También buscar por índice en window._picks
+  // Buscar por índice en window._picks
   Object.entries(window._picks).forEach(([idx,pick])=>{
     if(colocados.has(pick.id)){
-      document.querySelectorAll('.btn').forEach(btn=>{
+      document.querySelectorAll('.btn-colocar').forEach(btn=>{
         const onclick=btn.getAttribute('onclick')||'';
-        if(onclick.includes('colocarPick') && onclick.includes('(this,'+idx+')')){
-          btn.textContent='✓ Colocado en Stake';
+        if(onclick.includes('(this,'+idx+')')){
+          btn.textContent='✓ Ya colocado';
           btn.style.color='var(--teal)';
           btn.style.borderColor='var(--teal)';
+          btn.style.opacity='0.7';
           btn.disabled=true;
         }
       });
@@ -1785,7 +1786,7 @@ async function colocarPick(btn,pickId){
     const r=await aFetch('/api/picks/colocar',{method:'POST',body:JSON.stringify(pickConBankroll)});
     const d=await r.json();
     if(d.ok){
-      btn.textContent='✓ Colocado en Stake';
+      btn.textContent='✓ Ya colocado';
       btn.style.color='var(--teal)';
       btn.style.borderColor='var(--teal)';
       btn.disabled=true;
