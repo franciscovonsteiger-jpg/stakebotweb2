@@ -744,6 +744,10 @@ function getToken(){return localStorage.getItem('sb_token')||'';}
 function authH(){const t=getToken();return t?{'Authorization':'Bearer '+t,'Content-Type':'application/json'}:{'Content-Type':'application/json'};}
 async function aFetch(url,opts={}){opts.credentials='include';opts.headers={...authH(),...(opts.headers||{})};return fetch(url,opts);}
 function fmt(n,d=2){return n!=null?Number(n).toFixed(d):'—';}
+function fmtMiles(n){
+  if(n==null||n===undefined) return '—';
+  return Math.round(n).toLocaleString('es-AR');
+}
 function fmtUSD(n,m='USD'){if(n==null)return'—';const s=n>=0?'+':'-';return s+'$'+Math.abs(n).toFixed(2)+' '+m;}
 function fmtPct(n){return n!=null?(n>=0?'+':'')+Number(n).toFixed(1)+'%':'—';}
 function fmtDate(d){if(!d)return'—';return new Date(d).toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'});}
@@ -843,7 +847,7 @@ function renderStats(stats, moneda='USD'){
     <div class="metric m-${stats.roi>=0?'green':'red'}">
       <div class="metric-label">ROI real</div>
       <div class="metric-val" style="color:${roiColor}">${fmtPct(stats.roi)}</div>
-      <div class="metric-sub">sobre picks resueltos</div>
+      <div class="metric-sub">sobre bankroll inicial</div>
     </div>
     <div class="metric m-${stats.pnl_total>=0?'teal':'red'}">
       <div class="metric-label">P&L total</div>
@@ -857,12 +861,12 @@ function renderStats(stats, moneda='USD'){
     </div>
     <div class="metric m-violet">
       <div class="metric-label">En juego (pendiente)</div>
-      <div class="metric-val" style="color:var(--amber);font-size:18px">${Number(stats.invertido_pendiente||0).toLocaleString('es-AR',{maximumFractionDigits:0})}</div>
+      <div class="metric-val" style="color:var(--amber);font-size:18px">${fmtMiles(stats.invertido_pendiente||0)}</div>
       <div class="metric-sub">${moneda} pendiente resultado</div>
     </div>
     <div class="metric m-blue">
       <div class="metric-label">Invertido (resuelto)</div>
-      <div class="metric-val" style="color:var(--blue);font-size:18px">${Number(stats.invertido_resuelto||0).toLocaleString('es-AR',{maximumFractionDigits:0})}</div>
+      <div class="metric-val" style="color:var(--blue);font-size:18px">${fmtMiles(stats.invertido_resuelto||0)}</div>
       <div class="metric-sub">${moneda} ya jugado</div>
     </div>
   </div>
