@@ -245,8 +245,8 @@ async def get_stats(request: Request):
         # Agregar ratio de conversión para que el frontend muestre en moneda correcta
         engine_bankroll = float(os.getenv("BANKROLL_USD", 1000))
         user_bankroll   = float(user.get("bankroll", 1000))
-        data["moneda"]  = user.get("moneda", "USD")
-        data["ratio"]   = 1  # Engine ya usa el bankroll del usuario
+        data["moneda"] = user.get("moneda", "USD")
+        data["ratio"]  = 1  # Stake ya calculado con bankroll_engine del usuario
         return JSONResponse(data)
     except Exception as e:
         log.error(f"Error estadisticas: {e}")
