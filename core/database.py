@@ -369,11 +369,11 @@ async def get_estadisticas(user_id: int) -> dict:
             bankroll_hist = []
 
         def stake_real(p, bankroll_actual):
-            """Devuelve el stake ajustado al bankroll actual del usuario."""
-            be = p.get("bankroll_engine") or p.get("bankroll_antes") or 0
-            su = p.get("stake_usd") or 0
-            if be and be > 0 and su > 0:
-                pct = su / be  # % del bankroll que se apostó
+            """Devuelve el stake en la moneda del usuario usando el % original."""
+            be = float(p.get("bankroll_engine") or p.get("bankroll_antes") or 0)
+            su = float(p.get("stake_usd") or 0)
+            if be > 0 and su > 0 and bankroll_actual > 0:
+                pct = su / be  # % del bankroll apostado originalmente
                 return round(bankroll_actual * pct, 2)
             return su
 
@@ -384,9 +384,11 @@ async def get_estadisticas(user_id: int) -> dict:
             perdidos  = [p for p in resueltos if p["estado"] == "perdido"]
 
             # ROI y P&L solo sobre picks ya resueltos
-            pnl_total      = sum(p["pnl"] or 0 for p in resueltos)
-            invertido_res  = sum(p["stake_usd"] or 0 for p in resueltos)
-            invertido_pend = sum(p["stake_usd"] or 0 for p in pendientes)
+            bk = bk_actual or 1000
+            # Usar stake_real para todos los cálculos — convierte al bankroll del usuario
+            pnl_total      = sum((p["pnl"] or 0) * (bk / float(p.get("bankroll_engine") or p.get("bankroll_antes") or bk or 1)) for p in resueltos)
+            invertido_res  = sum(stake_real(p, bk) for p in resueltos)
+            invertido_pend = sum(stake_real(p, bk) for p in pendientes)
             # ROI sobre bankroll inicial (primer pick registrado)
             bankroll_inicial = None
             for p in sorted(picks, key=lambda x: x["fecha_colocado"] or ""):
@@ -401,8 +403,8 @@ async def get_estadisticas(user_id: int) -> dict:
             def tipo_stats(lista):
                 if not lista: return {"total":0,"ganados":0,"win_rate":0,"pnl":0,"roi":0}
                 g   = [p for p in lista if p["estado"] in ("ganado","cashout")]
-                pnl = sum(p["pnl"] or 0 for p in lista)
-                inv = sum(p["stake_usd"] or 0 for p in lista)
+                pnl = sum((p["pnl"] or 0) * (bk / float(p.get("bankroll_engine") or p.get("bankroll_antes") or bk or 1)) for p in lista)
+                inv = sum(stake_real(p, bk) for p in lista)
                 return {"total":len(lista),"ganados":len(g),
                         "win_rate":round(len(g)/len(lista)*100,1),
                         "pnl":round(pnl,2),
@@ -424,8 +426,9 @@ async def get_estadisticas(user_id: int) -> dict:
                 "pnl_total":        round(pnl_total, 2),
                 "invertido_resuelto": round(invertido_res, 2),   # solo resueltos
                 "invertido_pendiente": round(invertido_pend, 2), # en juego
-                "invertido_total":  round(invertido_res + invertido_pend, 2),
-                "roi":              roi,  # SOLO sobre resueltos
+                "invertido_total":    round(invertido_res + invertido_pend, 2),
+                "bankroll_disponible": round((bk_actual or 1000) - invertido_pend, 2),
+                "roi":               roi,  # SOLO sobre resueltos
                 "value_stats":      tipo_stats([p for p in resueltos if p["tipo"]=="value" and not p["es_gold"]]),
                 "sure_stats":       tipo_stats([p for p in resueltos if p["tipo"]=="sure"]),
                 "gold_stats":       tipo_stats([p for p in resueltos if p["es_gold"]]),
