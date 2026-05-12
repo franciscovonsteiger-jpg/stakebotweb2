@@ -28,32 +28,38 @@ MARKETS_BY_SPORT = {
 }
 
 SPORTS_ACTIVE = {
-    # Fútbol
-    "soccer_epl":                {"nombre": "Premier League",    "deporte": "Fútbol",  "tipo": "soccer"},
-    "soccer_spain_la_liga":      {"nombre": "La Liga",           "deporte": "Fútbol",  "tipo": "soccer"},
-    "soccer_germany_bundesliga": {"nombre": "Bundesliga",        "deporte": "Fútbol",  "tipo": "soccer"},
-    "soccer_italy_serie_a":      {"nombre": "Serie A",           "deporte": "Fútbol",  "tipo": "soccer"},
-    "soccer_uefa_champs_league": {"nombre": "Champions League",  "deporte": "Fútbol",  "tipo": "soccer"},
-    "soccer_usa_mls":            {"nombre": "MLS",               "deporte": "Fútbol",  "tipo": "soccer"},
-    # Tenis — torneos activos ahora + Roland Garros cuando empiece (24 mayo)
-    "tennis_atp_french_open":    {"nombre": "ATP Roland Garros", "deporte": "Tenis",   "tipo": "tennis"},
-    "tennis_wta_french_open":    {"nombre": "WTA Roland Garros", "deporte": "Tenis",   "tipo": "tennis"},
-    "tennis_atp":                {"nombre": "ATP Tour",          "deporte": "Tenis",   "tipo": "tennis"},
-    "tennis_wta":                {"nombre": "WTA Tour",          "deporte": "Tenis",   "tipo": "tennis"},
-    "tennis_atp_rome":           {"nombre": "ATP Roma",          "deporte": "Tenis",   "tipo": "tennis"},
-    "tennis_wta_rome":           {"nombre": "WTA Roma",          "deporte": "Tenis",   "tipo": "tennis"},
-    "tennis_atp_hamburg":        {"nombre": "ATP Hamburgo",      "deporte": "Tenis",   "tipo": "tennis"},
-    "tennis_wta_strasbourg":     {"nombre": "WTA Estrasburgo",   "deporte": "Tenis",   "tipo": "tennis"},
-    # Básquet
-    "basketball_nba":            {"nombre": "NBA",               "deporte": "Básquet", "tipo": "basketball"},
-    "basketball_nba_championship_winner": {"nombre": "NBA Finals","deporte": "Básquet","tipo": "basketball"},
-    # Béisbol
-    "baseball_mlb":              {"nombre": "MLB",               "deporte": "Béisbol", "tipo": "baseball"},
-    # MMA
-    "mma_mixed_martial_arts":    {"nombre": "MMA/UFC",           "deporte": "MMA",     "tipo": "mma"},
-    # Esports
-    "esports_lol":               {"nombre": "LoL LCK/LEC",       "deporte": "Esports", "tipo": "esports"},
-    "esports_csgo":              {"nombre": "CS2 Pro League",    "deporte": "Esports", "tipo": "esports"},
+    # ── Fútbol Europa ──────────────────────────────────────────────────────────────
+    "soccer_epl":                {"nombre": "Premier League",      "deporte": "Fútbol", "tipo": "soccer"},
+    "soccer_spain_la_liga":      {"nombre": "La Liga",             "deporte": "Fútbol", "tipo": "soccer"},
+    "soccer_germany_bundesliga": {"nombre": "Bundesliga",          "deporte": "Fútbol", "tipo": "soccer"},
+    "soccer_italy_serie_a":      {"nombre": "Serie A",             "deporte": "Fútbol", "tipo": "soccer"},
+    "soccer_uefa_champs_league": {"nombre": "Champions League",    "deporte": "Fútbol", "tipo": "soccer"},
+    "soccer_uefa_europa_league": {"nombre": "Europa League",       "deporte": "Fútbol", "tipo": "soccer"},
+    "soccer_france_ligue_one":   {"nombre": "Ligue 1",             "deporte": "Fútbol", "tipo": "soccer"},
+    "soccer_netherlands_eredivisie": {"nombre": "Eredivisie",      "deporte": "Fútbol", "tipo": "soccer"},
+    "soccer_portugal_primeira_liga": {"nombre": "Primeira Liga",   "deporte": "Fútbol", "tipo": "soccer"},
+    # ── Fútbol Sudamérica (horario conveniente Argentina) ───────────────────────
+    "soccer_conmebol_copa_libertadores": {"nombre": "Copa Libertadores", "deporte": "Fútbol", "tipo": "soccer"},
+    "soccer_conmebol_copa_sudamericana": {"nombre": "Copa Sudamericana",  "deporte": "Fútbol", "tipo": "soccer"},
+    "soccer_argentina_primera_division": {"nombre": "Liga Argentina",     "deporte": "Fútbol", "tipo": "soccer"},
+    "soccer_brazil_campeonato":          {"nombre": "Brasileirão",        "deporte": "Fútbol", "tipo": "soccer"},
+    "soccer_chile_campeonato":           {"nombre": "Primera Chile",      "deporte": "Fútbol", "tipo": "soccer"},
+    "soccer_mexico_ligamx":              {"nombre": "Liga MX",            "deporte": "Fútbol", "tipo": "soccer"},
+    "soccer_usa_mls":                    {"nombre": "MLS",                "deporte": "Fútbol", "tipo": "soccer"},
+    # ── Tenis ───────────────────────────────────────────────────────────────────
+    "tennis_atp_french_open":    {"nombre": "ATP Roland Garros",   "deporte": "Tenis",  "tipo": "tennis"},
+    "tennis_wta_french_open":    {"nombre": "WTA Roland Garros",   "deporte": "Tenis",  "tipo": "tennis"},
+    "tennis_atp":                {"nombre": "ATP Tour",             "deporte": "Tenis",  "tipo": "tennis"},
+    "tennis_wta":                {"nombre": "WTA Tour",             "deporte": "Tenis",  "tipo": "tennis"},
+    # ── Básquet ─────────────────────────────────────────────────────────────────
+    "basketball_nba":            {"nombre": "NBA",                  "deporte": "Básquet","tipo": "basketball"},
+    # ── Béisbol ─────────────────────────────────────────────────────────────────
+    "baseball_mlb":              {"nombre": "MLB",                  "deporte": "Béisbol","tipo": "baseball"},
+    # ── MMA ─────────────────────────────────────────────────────────────────────
+    "mma_mixed_martial_arts":    {"nombre": "MMA/UFC",              "deporte": "MMA",    "tipo": "mma"},
+    # ── Esports ─────────────────────────────────────────────────────────────────
+    "esports_lol":               {"nombre": "LoL LCK/LEC",          "deporte": "Esports","tipo": "esports"},
+    "esports_csgo":              {"nombre": "CS2 Pro League",       "deporte": "Esports","tipo": "esports"},
 }
 
 CONTEXT_RULES = [
