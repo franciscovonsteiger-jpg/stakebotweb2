@@ -178,10 +178,17 @@ async def trigger_scan(request: Request, background_tasks: BackgroundTasks):
 @app.post("/api/picks/colocar")
 async def colocar_pick(request: Request):
     user = await require_auth(request)
-    if not user: return JSONResponse({"ok":False}, status_code=401)
-    data = await request.json()
-    from core.database import guardar_pick
-    return JSONResponse(await guardar_pick(user["id"], data))
+    if not user: return JSONResponse({"ok":False,"error":"No autenticado"}, status_code=401)
+    try:
+        data = await request.json()
+        log.info(f"Guardando pick para user {user['id']}: {data.get('evento','?')} - {data.get('equipo_pick','?')}")
+        from core.database import guardar_pick
+        result = await guardar_pick(user["id"], data)
+        log.info(f"Resultado guardar_pick: {result}")
+        return JSONResponse(result)
+    except Exception as e:
+        log.error(f"Error en colocar_pick: {e}")
+        return JSONResponse({"ok":False,"error":str(e)}, status_code=500)
 
 @app.post("/api/picks/{pick_id}/resultado")
 async def resultado_pick(pick_id: int, request: Request):
@@ -1217,13 +1224,32 @@ function renderVivoCard(p){
 
 async function colocarPick(btn,pickId){
   const pick=window._picks[pickId] || window._picks[String(pickId)];
-  if(!pick){btn.textContent='✓ Colocado';btn.style.color='var(--teal)';btn.disabled=true;return;}
+  if(!pick){
+    console.error('Pick no encontrado:', pickId, 'Keys:', Object.keys(window._picks));
+    btn.textContent='Error - recargá';btn.style.color='var(--red)';
+    return;
+  }
   btn.disabled=true;btn.textContent='Guardando...';
   try{
-    await aFetch('/api/picks/colocar',{method:'POST',body:JSON.stringify(pick)});
-    btn.textContent='✓ Colocado';btn.style.color='var(--teal)';btn.style.borderColor='var(--teal)';
-    btn.title='Ver en Mis Stats para confirmar resultado';
-  }catch(e){btn.textContent='✓ Colocado';btn.style.color='var(--teal)';btn.disabled=true;}
+    const r=await aFetch('/api/picks/colocar',{method:'POST',body:JSON.stringify(pick)});
+    const d=await r.json();
+    if(d.ok){
+      btn.textContent='✓ Guardado en Stats';
+      btn.style.color='var(--teal)';
+      btn.style.borderColor='var(--teal)';
+      btn.title='Abrí Mis Stats para confirmar el resultado';
+    } else {
+      console.error('Error guardando pick:', d.error);
+      btn.textContent='✓ Colocado (sin guardar)';
+      btn.style.color='var(--amber)';
+      btn.disabled=false;
+    }
+  }catch(e){
+    console.error('Error de red:', e);
+    btn.textContent='Error de red';
+    btn.style.color='var(--red)';
+    btn.disabled=false;
+  }
 }
 
 async function colocarSure(btn,sureId){
