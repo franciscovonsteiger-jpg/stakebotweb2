@@ -235,6 +235,20 @@ async def ajustar_bankroll_ep(request: Request):
         data.get("tipo","ajuste"), data.get("descripcion","")
     ))
 
+@app.post("/api/me/bankroll/set")
+async def set_bankroll_directo(request: Request):
+    """Setea el bankroll directamente sin registrar en historial."""
+    user = await require_auth(request)
+    if not user: return JSONResponse({"ok":False}, status_code=401)
+    data = await request.json()
+    monto = float(data.get("monto", 0))
+    if monto <= 0: return JSONResponse({"ok":False,"error":"Monto inválido"})
+    from core.database import get_pool
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE usuarios SET bankroll=$1 WHERE id=$2", monto, user["id"])
+    return JSONResponse({"ok":True,"bankroll_nuevo":monto})
+
 @app.post("/api/me/bankroll/revertir/{historial_id}")
 async def revertir_ajuste_ep(historial_id: int, request: Request):
     user = await require_auth(request)
