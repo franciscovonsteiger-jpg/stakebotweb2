@@ -1648,7 +1648,14 @@ async function colocarPick(btn,pickId){
   }
   btn.disabled=true;btn.textContent='Guardando...';
   try{
-    const r=await aFetch('/api/picks/colocar',{method:'POST',body:JSON.stringify(pick)});
+    // Enriquecer el pick con el bankroll actual del usuario
+    // así el stake_usd guardado es el real en ARS
+    const pickConBankroll = {
+      ...pick,
+      bankroll_engine: DATA?.bankroll || pick.bankroll_engine,
+      stake_usd: pick.stake_usd,  // ya calculado en ARS por recalc()
+    };
+    const r=await aFetch('/api/picks/colocar',{method:'POST',body:JSON.stringify(pickConBankroll)});
     const d=await r.json();
     if(d.ok){
       btn.textContent='✓ Guardado en Stats';
