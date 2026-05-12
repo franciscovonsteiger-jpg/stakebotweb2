@@ -163,7 +163,7 @@ async def login(email, password) -> dict:
             user["id"], token
         )
         await conn.execute("UPDATE usuarios SET ultimo_login=NOW() WHERE id=$1", user["id"])
-        return {"ok": True, "token": token, "user": dict(user)}
+        return {"ok": True, "token": token, "user": serialize_row(dict(user))}
 
 async def get_user_by_token(token) -> Optional[dict]:
     pool = await get_pool()
@@ -298,6 +298,16 @@ async def actualizar_resultado(pick_db_id: int, user_id: int, data: dict) -> dic
 
         return {"ok": True, "pnl": pnl, "bankroll_nuevo": bankroll_despues}
 
+def serialize_row(row: dict) -> dict:
+    """Convierte datetime a string para serialización JSON."""
+    result = {}
+    for k, v in row.items():
+        if hasattr(v, 'isoformat'):
+            result[k] = v.isoformat()
+        else:
+            result[k] = v
+    return result
+
 async def get_estadisticas(user_id: int) -> dict:
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -372,9 +382,9 @@ async def get_estadisticas(user_id: int) -> dict:
             "moneda":         user["moneda"] if user else "USD",
             "todo":           calcular(todos),
             "mes":            calcular(mes),
-            "pendientes":     [dict(r) for r in todos if dict(r).get("estado")=="pendiente"],
-            "historial":      [dict(r) for r in todos[:100]],
-            "bankroll_hist":  [dict(r) for r in bankroll_hist],
+            "pendientes":     [serialize_row(dict(r)) for r in todos if dict(r).get("estado")=="pendiente"],
+            "historial":      [serialize_row(dict(r)) for r in todos[:100]],
+            "bankroll_hist":  [serialize_row(dict(r)) for r in bankroll_hist],
         }
 
 # ── Admin ──────────────────────────────────────────────────────────────────────
@@ -393,7 +403,7 @@ async def get_invitaciones() -> list:
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch("SELECT * FROM invitaciones ORDER BY fecha_creacion DESC")
-        return [dict(r) for r in rows]
+        return [serialize_row(dict(r)) for r in rows]
 
 async def get_all_users() -> list:
     pool = await get_pool()
@@ -401,7 +411,7 @@ async def get_all_users() -> list:
         rows = await conn.fetch(
             "SELECT id,email,username,plan,activo,bankroll,moneda,perfil_riesgo,tg_activo,fecha_registro,ultimo_login FROM usuarios ORDER BY fecha_registro DESC"
         )
-        return [dict(r) for r in rows]
+        return [serialize_row(dict(r)) for r in rows]
 
 async def set_user_plan(user_id, plan):
     pool = await get_pool()
