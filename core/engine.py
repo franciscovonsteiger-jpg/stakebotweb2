@@ -305,9 +305,13 @@ def _analizar(ev, meta, market_key, es_vivo=False):
 
     return value_picks, sure_picks
 
-def escanear_mercado() -> dict:
+def escanear_mercado(bankroll_usuario: float = None) -> dict:
     if not API_KEY:
         raise ValueError("Sin API key configurada")
+    # Usar bankroll del usuario si se pasa, sino el del env
+    global BANKROLL
+    if bankroll_usuario and bankroll_usuario > 0:
+        BANKROLL = bankroll_usuario
 
     all_value:   list[ValuePick] = []
     all_sure:    list[SurePick]  = []
