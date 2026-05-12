@@ -254,6 +254,42 @@ async def colocar_pick(request: Request):
         log.error(f"Error en colocar_pick: {e}")
         return JSONResponse({"ok":False,"error":str(e)}, status_code=500)
 
+@app.post("/api/admin/migrar-stakes")
+async def migrar_stakes(request: Request):
+    """Actualiza los stakes históricos al bankroll actual del usuario."""
+    user = await require_auth(request)
+    if not user or user["plan"]!="admin": return JSONResponse({"ok":False},status_code=403)
+    try:
+        from core.database import get_pool
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            # Para cada usuario, recalcular sus stakes usando su bankroll actual
+            usuarios = await conn.fetch("SELECT id, bankroll FROM usuarios WHERE bankroll > 0")
+            total_actualizados = 0
+            for u in usuarios:
+                bankroll = float(u["bankroll"])
+                # Obtener picks con stake_usd pequeño (en USD, no en moneda del usuario)
+                picks = await conn.fetch("""
+                    SELECT id, stake_usd, bankroll_antes, odds_ref
+                    FROM historial_picks
+                    WHERE usuario_id=$1 AND stake_usd < 10000
+                """, u["id"])
+                for p in picks:
+                    stake_usd = float(p["stake_usd"] or 0)
+                    bk_antes  = float(p["bankroll_antes"] or 1000)
+                    if stake_usd > 0 and bk_antes > 0:
+                        pct = stake_usd / bk_antes  # % original
+                        nuevo_stake = round(bankroll * pct, 2)
+                        await conn.execute("""
+                            UPDATE historial_picks
+                            SET stake_usd=$1, bankroll_engine=$2
+                            WHERE id=$3
+                        """, nuevo_stake, bankroll, p["id"])
+                        total_actualizados += 1
+        return JSONResponse({"ok": True, "actualizados": total_actualizados})
+    except Exception as e:
+        return JSONResponse({"ok":False,"error":str(e)}, status_code=500)
+
 @app.post("/api/trial")
 async def activar_trial_ep(request: Request):
     user = await require_auth(request)
