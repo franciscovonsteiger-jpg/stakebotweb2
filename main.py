@@ -68,21 +68,30 @@ def picks_para_usuario(user: dict) -> dict:
     vivo     = r.get("picks_vivo", [])
 
     if plan in ("premium", "admin"):
-        # Recalcular stake según bankroll real del usuario
+        # Recalcular stake usando el % de Kelly del engine sobre el bankroll real
+        # El engine guarda gold_score y edge — recalculamos con MAX_STAKE_PCT fijo
+        MAX_STAKE = 0.05  # 5% máximo del bankroll
+
         def recalc(picks):
             result = []
             for p in picks:
-                if p.get("stake_usd") and p.get("odds_ref"):
-                    # stake_pct del engine original
-                    stake_pct = p.get("stake_pct", 0.05)
-                    nuevo_stake = round(bankroll * stake_pct / 100, 2)
-                    ganancia   = round(nuevo_stake * (p["odds_ref"] - 1), 2)
-                    roi        = round(ganancia / bankroll * 100, 2) if bankroll else 0
-                    result.append({**p, "stake_usd": nuevo_stake, "ganancia_pot": ganancia, "roi_diario_pct": roi})
+                if p.get("odds_ref"):
+                    # Usar edge para estimar Kelly fraction
+                    edge     = p.get("edge", 0)
+                    prob     = p.get("prob_ajustada", 0.5)
+                    odds     = p["odds_ref"]
+                    b        = odds - 1
+                    kelly    = max(0.0, (b * prob - (1 - prob)) / b) if b > 0 else 0
+                    pct      = min(kelly * 0.5, MAX_STAKE)  # 1/2 Kelly, cap 5%
+                    stake    = round(bankroll * pct, 2)
+                    ganancia = round(stake * b, 2)
+                    roi      = round(ganancia / bankroll * 100, 2) if bankroll else 0
+                    result.append({**p, "stake_usd": stake,
+                                   "ganancia_pot": ganancia, "roi_diario_pct": roi})
                 else:
                     result.append(p)
             return result
-        gold_vis = recalc(gold); sure_vis = sure; vivo_vis = recalc(vivo)
+        gold_vis = recalc(gold); sure_vis = recalc(sure); vivo_vis = recalc(vivo)
     else:
         gold_vis = [{**p, "stake_usd": None, "ganancia_pot": None, "roi_diario_pct": None} for p in gold[:3]]
         sure_vis = sure[:2]; vivo_vis = []
