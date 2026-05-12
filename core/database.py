@@ -228,6 +228,9 @@ async def guardar_pick(user_id: int, pick: dict) -> dict:
         # Si el usuario tiene moneda ARS y el stake viene en USD, usarlo tal cual
         # El stake ya está calculado según el bankroll del usuario en /api/picks
         stake            = stake_original
+        # bankroll_engine es el bankroll del usuario cuando se calculó el stake
+        # Si viene del pick (ya calculado en ARS), usarlo directamente
+        bankroll_engine_pick = float(pick.get("bankroll_engine") or bankroll_antes or 1)
         bankroll_despues = round(bankroll_antes - stake, 2)  # descontar al colocar
 
         try:
@@ -255,7 +258,7 @@ async def guardar_pick(user_id: int, pick: dict) -> dict:
                 bool(pick.get("es_gold", False)),
                 bankroll_antes,
                 bankroll_despues,
-                bankroll_antes,  # bankroll_engine = bankroll del usuario al momento de colocar
+                bankroll_engine_pick,  # bankroll usado para calcular el stake
             )
             # Solo descontar si se insertó (no era duplicado)
             if result == "INSERT 0 1":
@@ -369,13 +372,21 @@ async def get_estadisticas(user_id: int) -> dict:
             bankroll_hist = []
 
         def stake_real(p, bankroll_actual):
-            """Devuelve el stake en la moneda del usuario usando el % original."""
+            """
+            Devuelve el stake en la moneda del usuario.
+            Si el pick tiene bankroll_engine = bankroll del usuario → stake ya en ARS, ratio=1.
+            Si el pick tiene bankroll_engine = 1000 (USD default) → aplicar ratio.
+            """
             be = float(p.get("bankroll_engine") or p.get("bankroll_antes") or 0)
             su = float(p.get("stake_usd") or 0)
-            if be > 0 and su > 0 and bankroll_actual > 0:
-                pct = su / be  # % del bankroll apostado originalmente
-                return round(bankroll_actual * pct, 2)
-            return su
+            if su <= 0: return 0
+            if be <= 0: return su
+            # Si el stake_engine es similar al bankroll actual → ya está en la moneda correcta
+            if be > 1000:  # probablemente ya en ARS
+                return su
+            # Si stake_engine es pequeño (USD) → aplicar ratio
+            pct = su / be
+            return round(bankroll_actual * pct, 2)
 
         def calcular(picks, bk_actual=None):
             resueltos = [p for p in picks if p["estado"] in ("ganado","perdido","void","cashout")]
