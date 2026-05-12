@@ -1799,42 +1799,46 @@ function renderVivoCard(p){
   </div>`;
 }
 
-function getColocados(){
-  try{return new Set(JSON.parse(localStorage.getItem('picks_colocados')||'[]'));}
-  catch(e){return new Set();}
-}
 function saveColocado(pickId){
-  const set=getColocados();
-  set.add(pickId);
-  localStorage.setItem('picks_colocados',JSON.stringify([...set]));
+  // Guardar también en localStorage como cache rápido
+  try{
+    const set=new Set(JSON.parse(localStorage.getItem('picks_colocados')||'[]'));
+    set.add(pickId);
+    localStorage.setItem('picks_colocados',JSON.stringify([...set]));
+  }catch(e){}
 }
 
-function marcarYaColocados(){
-  const colocados=getColocados();
-  if(!colocados.size) return;
-  document.querySelectorAll('[data-pick-id]').forEach(btn=>{
-    if(colocados.has(btn.getAttribute('data-pick-id'))){
-      btn.textContent='✓ Ya colocado';
-      btn.style.color='var(--teal)';
-      btn.style.borderColor='var(--teal)';
-      btn.disabled=true;
-    }
-  });
-  // Buscar por índice en window._picks
-  Object.entries(window._picks).forEach(([idx,pick])=>{
-    if(colocados.has(pick.id)){
-      document.querySelectorAll('.btn-colocar').forEach(btn=>{
-        const onclick=btn.getAttribute('onclick')||'';
-        if(onclick.includes('(this,'+idx+')')){
-          btn.textContent='✓ Ya colocado';
-          btn.style.color='var(--teal)';
-          btn.style.borderColor='var(--teal)';
-          btn.style.opacity='0.7';
-          btn.disabled=true;
-        }
-      });
-    }
-  });
+async function marcarYaColocados(){
+  try{
+    // Consultar picks pendientes en DB — comparar por evento+pick
+    const r=await aFetch('/api/estadisticas');
+    if(!r||r.status!==200) return;
+    const stats=await r.json();
+    const pendientes=(stats.pendientes||[]);
+    if(!pendientes.length) return;
+
+    // Crear set de claves evento+pick para comparar
+    const colocadosKeys=new Set(pendientes.map(p=>
+      (p.evento||'')+'|'+(p.equipo_pick||'')
+    ));
+
+    // Marcar botones cuyos picks coincidan
+    Object.entries(window._picks).forEach(([idx,pick])=>{
+      const key=(pick.evento||'')+'|'+(pick.equipo_pick||'');
+      if(colocadosKeys.has(key)){
+        document.querySelectorAll('.btn-colocar').forEach(btn=>{
+          const onclick=btn.getAttribute('onclick')||'';
+          if(onclick.includes('(this,'+idx+')')){
+            btn.textContent='✓ Ya colocado';
+            btn.style.color='var(--teal)';
+            btn.style.borderColor='var(--teal)';
+            btn.style.opacity='0.8';
+            btn.disabled=true;
+          }
+        });
+      }
+    });
+  }catch(e){console.log('marcarYaColocados error:',e);}
 }
 
 async function colocarPick(btn,pickId){
