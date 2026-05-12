@@ -340,7 +340,10 @@ async def actualizar_resultado(pick_db_id: int, user_id: int, data: dict) -> dic
         estado       = data.get("estado", "")
         odds_real    = float(data.get("odds_real") or row["odds_ref"] or 0)
         odds_cashout = float(data.get("odds_cashout") or 0)
-        stake        = float(row["stake_usd"] or 0)
+        # Usar stake real si el usuario lo especificó, sino el recomendado
+        stake_recomendado = float(row["stake_usd"] or 0)
+        stake_real_input  = float(data.get("stake_real") or 0)
+        stake        = stake_real_input if stake_real_input > 0 else stake_recomendado
         es_cashout   = estado == "cashout"
 
         if estado == "ganado":
@@ -362,10 +365,11 @@ async def actualizar_resultado(pick_db_id: int, user_id: int, data: dict) -> dic
         await conn.execute("""
             UPDATE historial_picks
             SET estado=$1, odds_real=$2, odds_cashout=$3, es_cashout=$4,
-                pnl=$5, bankroll_despues=$6, fecha_resultado=NOW()
+                pnl=$5, bankroll_despues=$6, fecha_resultado=NOW(),
+                stake_usd=$8
             WHERE id=$7
         """, estado, odds_real, odds_cashout if es_cashout else None,
-             es_cashout, pnl, bankroll_despues, pick_db_id)
+             es_cashout, pnl, bankroll_despues, pick_db_id, stake)
 
         # Actualizar bankroll del usuario
         await conn.execute("UPDATE usuarios SET bankroll=$1 WHERE id=$2", bankroll_despues, user_id)
