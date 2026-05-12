@@ -217,14 +217,23 @@ async def ajustar_bankroll(user_id: int, monto: float, tipo: str, descripcion: s
 async def guardar_pick(user_id: int, pick: dict) -> dict:
     pool = await get_pool()
     async with pool.acquire() as conn:
-        user = await conn.fetchrow("SELECT bankroll FROM usuarios WHERE id=$1", user_id)
-        bankroll_antes = float(user["bankroll"]) if user else 0
+        user = await conn.fetchrow("SELECT bankroll, moneda FROM usuarios WHERE id=$1", user_id)
+        bankroll_antes   = float(user["bankroll"]) if user else 0
+        moneda           = user["moneda"] if user else "USD"
+        stake_original   = float(pick.get("stake_usd") or 0)
+
+        # Si el usuario tiene moneda ARS y el stake viene en USD, usarlo tal cual
+        # El stake ya está calculado según el bankroll del usuario en /api/picks
+        stake            = stake_original
+        bankroll_despues = round(bankroll_antes - stake, 2)  # descontar al colocar
+
         try:
-            await conn.execute("""
+            result = await conn.execute("""
                 INSERT INTO historial_picks
                     (usuario_id, pick_id, evento, liga, deporte, mercado,
-                     equipo_pick, odds_ref, stake_usd, tipo, es_gold, estado, bankroll_antes)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pendiente',$12)
+                     equipo_pick, odds_ref, stake_usd, tipo, es_gold, estado,
+                     bankroll_antes, bankroll_despues)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pendiente',$12,$13)
                 ON CONFLICT (usuario_id, pick_id) DO NOTHING
             """,
                 user_id,
@@ -235,13 +244,26 @@ async def guardar_pick(user_id: int, pick: dict) -> dict:
                 pick.get("mercado",""),
                 pick.get("equipo_pick",""),
                 float(pick.get("odds_ref") or pick.get("odds_stake") or 0),
-                float(pick.get("stake_usd") or 0),
+                stake,
                 pick.get("tipo","value"),
                 bool(pick.get("es_gold", False)),
                 bankroll_antes,
+                bankroll_despues,
             )
-            return {"ok": True}
+            # Solo descontar si se insertó (no era duplicado)
+            if result == "INSERT 0 1":
+                await conn.execute(
+                    "UPDATE usuarios SET bankroll=$1 WHERE id=$2",
+                    bankroll_despues, user_id
+                )
+                await conn.execute(
+                    "INSERT INTO bankroll_historial (usuario_id,monto,tipo,descripcion) VALUES ($1,$2,$3,$4)",
+                    user_id, -stake, "pick_colocado",
+                    f"{pick.get('evento','')} — stake colocado"
+                )
+            return {"ok": True, "bankroll_nuevo": bankroll_despues}
         except Exception as e:
+            log.error(f"Error guardar_pick: {e}")
             return {"ok": False, "error": str(e)}
 
 async def actualizar_resultado(pick_db_id: int, user_id: int, data: dict) -> dict:
