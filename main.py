@@ -1843,35 +1843,50 @@ function saveColocado(pickId){
 
 async function marcarYaColocados(){
   try{
-    // Consultar picks pendientes en DB — comparar por evento+pick
     const r=await aFetch('/api/estadisticas');
     if(!r||r.status!==200) return;
     const stats=await r.json();
-    const pendientes=(stats.pendientes||[]);
-    if(!pendientes.length) return;
+    // Incluir pendientes E historial reciente (últimas 48hs)
+    const ahora = Date.now();
+    const todos = (stats.pendientes||[]).concat(
+      (stats.historial||[]).filter(p=>{
+        if(!p.fecha_colocado) return false;
+        const d = new Date(p.fecha_colocado).getTime();
+        return (ahora - d) < 48*60*60*1000; // últimas 48hs
+      })
+    );
+    if(!todos.length) return;
 
-    // Crear set de claves evento+pick para comparar
-    const colocadosKeys=new Set(pendientes.map(p=>
-      (p.evento||'')+'|'+(p.equipo_pick||'')
+    // Claves por evento+mercado+pick (más específico)
+    const colocadosKeys = new Set(todos.map(p=>
+      (p.evento||'').toLowerCase().trim() + '|' +
+      (p.mercado||'').toLowerCase().trim() + '|' +
+      (p.equipo_pick||'').toLowerCase().trim()
     ));
 
-    // Marcar botones cuyos picks coincidan
+    // Marcar cada pick que coincida
     Object.entries(window._picks).forEach(([idx,pick])=>{
-      const key=(pick.evento||'')+'|'+(pick.equipo_pick||'');
+      const key =
+        (pick.evento||'').toLowerCase().trim() + '|' +
+        (pick.mercado||'').toLowerCase().trim() + '|' +
+        (pick.equipo_pick||'').toLowerCase().trim();
+
       if(colocadosKeys.has(key)){
+        // Buscar el botón de este pick por su índice en el onclick
         document.querySelectorAll('.btn-colocar').forEach(btn=>{
-          const onclick=btn.getAttribute('onclick')||'';
-          if(onclick.includes('(this,'+idx+')')){
+          const onclick = btn.getAttribute('onclick')||'';
+          if(onclick.includes(','+idx+')')||onclick.includes(','+idx+' )')){
             btn.textContent='✓ Ya colocado';
             btn.style.color='var(--teal)';
             btn.style.borderColor='var(--teal)';
-            btn.style.opacity='0.8';
+            btn.style.background='rgba(0,212,170,0.08)';
+            btn.style.opacity='1';
             btn.disabled=true;
           }
         });
       }
     });
-  }catch(e){console.log('marcarYaColocados error:',e);}
+  }catch(e){console.log('marcarYaColocados:',e);}
 }
 
 async function colocarPick(btn,pickId){
