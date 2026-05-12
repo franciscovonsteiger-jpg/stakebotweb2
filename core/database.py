@@ -363,11 +363,16 @@ async def get_estadisticas(user_id: int) -> dict:
 
         def calcular(picks):
             resueltos = [p for p in picks if p["estado"] in ("ganado","perdido","void","cashout")]
+            pendientes = [p for p in picks if p["estado"] == "pendiente"]
             ganados   = [p for p in resueltos if p["estado"] in ("ganado","cashout")]
-            pnl_total = sum(p["pnl"] or 0 for p in resueltos)
-            invertido = sum(p["stake_usd"] or 0 for p in resueltos)
-            roi       = round(pnl_total / invertido * 100, 2) if invertido > 0 else 0
-            win_rate  = round(len(ganados) / len(resueltos) * 100, 1) if resueltos else 0
+            perdidos  = [p for p in resueltos if p["estado"] == "perdido"]
+
+            # ROI y P&L solo sobre picks ya resueltos
+            pnl_total      = sum(p["pnl"] or 0 for p in resueltos)
+            invertido_res  = sum(p["stake_usd"] or 0 for p in resueltos)
+            invertido_pend = sum(p["stake_usd"] or 0 for p in pendientes)
+            roi            = round(pnl_total / invertido_res * 100, 2) if invertido_res > 0 else 0
+            win_rate       = round(len(ganados) / len(resueltos) * 100, 1) if resueltos else 0
 
             def tipo_stats(lista):
                 if not lista: return {"total":0,"ganados":0,"win_rate":0,"pnl":0,"roi":0}
@@ -376,7 +381,8 @@ async def get_estadisticas(user_id: int) -> dict:
                 inv = sum(p["stake_usd"] or 0 for p in lista)
                 return {"total":len(lista),"ganados":len(g),
                         "win_rate":round(len(g)/len(lista)*100,1),
-                        "pnl":round(pnl,2),"roi":round(pnl/inv*100,2) if inv>0 else 0}
+                        "pnl":round(pnl,2),
+                        "roi":round(pnl/inv*100,2) if inv>0 else 0}
 
             dep_stats = {}
             for p in resueltos:
@@ -384,20 +390,22 @@ async def get_estadisticas(user_id: int) -> dict:
                 dep_stats.setdefault(d, []).append(p)
 
             return {
-                "total_colocados": len(picks),
-                "total_resueltos": len(resueltos),
-                "ganados":         len(ganados),
-                "perdidos":        len([p for p in resueltos if p["estado"]=="perdido"]),
-                "cashouts":        len([p for p in resueltos if p["estado"]=="cashout"]),
-                "pendientes":      len(picks) - len(resueltos),
-                "win_rate":        win_rate,
-                "pnl_total":       round(pnl_total, 2),
-                "invertido_total": round(invertido, 2),
-                "roi":             roi,
-                "value_stats":     tipo_stats([p for p in resueltos if p["tipo"]=="value" and not p["es_gold"]]),
-                "sure_stats":      tipo_stats([p for p in resueltos if p["tipo"]=="sure"]),
-                "gold_stats":      tipo_stats([p for p in resueltos if p["es_gold"]]),
-                "por_deporte":     {d: tipo_stats(v) for d,v in dep_stats.items()},
+                "total_colocados":  len(picks),
+                "total_resueltos":  len(resueltos),
+                "ganados":          len(ganados),
+                "perdidos":         len(perdidos),
+                "cashouts":         len([p for p in resueltos if p["estado"]=="cashout"]),
+                "pendientes":       len(pendientes),
+                "win_rate":         win_rate,
+                "pnl_total":        round(pnl_total, 2),
+                "invertido_resuelto": round(invertido_res, 2),   # solo resueltos
+                "invertido_pendiente": round(invertido_pend, 2), # en juego
+                "invertido_total":  round(invertido_res + invertido_pend, 2),
+                "roi":              roi,  # SOLO sobre resueltos
+                "value_stats":      tipo_stats([p for p in resueltos if p["tipo"]=="value" and not p["es_gold"]]),
+                "sure_stats":       tipo_stats([p for p in resueltos if p["tipo"]=="sure"]),
+                "gold_stats":       tipo_stats([p for p in resueltos if p["es_gold"]]),
+                "por_deporte":      {d: tipo_stats(v) for d,v in dep_stats.items()},
             }
 
         return {
