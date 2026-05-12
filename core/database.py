@@ -301,20 +301,32 @@ async def actualizar_resultado(pick_db_id: int, user_id: int, data: dict) -> dic
 async def get_estadisticas(user_id: int) -> dict:
     pool = await get_pool()
     async with pool.acquire() as conn:
-        todos = await conn.fetch(
-            "SELECT * FROM historial_picks WHERE usuario_id=$1 ORDER BY fecha_colocado DESC",
-            user_id
-        )
-        mes = await conn.fetch("""
-            SELECT * FROM historial_picks
-            WHERE usuario_id=$1 AND fecha_colocado >= NOW() - INTERVAL '30 days'
-            ORDER BY fecha_colocado DESC
-        """, user_id)
+        try:
+            todos = await conn.fetch(
+                "SELECT * FROM historial_picks WHERE usuario_id=$1 ORDER BY fecha_colocado DESC",
+                user_id
+            )
+        except Exception as e:
+            log.error(f"Error fetch historial: {e}")
+            todos = []
+        try:
+            mes = await conn.fetch("""
+                SELECT * FROM historial_picks
+                WHERE usuario_id=$1 AND fecha_colocado >= NOW() - INTERVAL '30 days'
+                ORDER BY fecha_colocado DESC
+            """, user_id)
+        except Exception as e:
+            log.error(f"Error fetch mes: {e}")
+            mes = []
         user = await conn.fetchrow("SELECT bankroll, moneda FROM usuarios WHERE id=$1", user_id)
-        bankroll_hist = await conn.fetch(
-            "SELECT * FROM bankroll_historial WHERE usuario_id=$1 ORDER BY fecha DESC LIMIT 30",
-            user_id
-        )
+        try:
+            bankroll_hist = await conn.fetch(
+                "SELECT * FROM bankroll_historial WHERE usuario_id=$1 ORDER BY fecha DESC LIMIT 30",
+                user_id
+            )
+        except Exception as e:
+            log.warning(f"bankroll_hist: {e}")
+            bankroll_hist = []
 
         def calcular(picks):
             resueltos = [p for p in picks if p["estado"] in ("ganado","perdido","void","cashout")]
@@ -360,7 +372,7 @@ async def get_estadisticas(user_id: int) -> dict:
             "moneda":         user["moneda"] if user else "USD",
             "todo":           calcular(todos),
             "mes":            calcular(mes),
-            "pendientes":     [dict(r) for r in todos if r["estado"]=="pendiente"],
+            "pendientes":     [dict(r) for r in todos if dict(r).get("estado")=="pendiente"],
             "historial":      [dict(r) for r in todos[:100]],
             "bankroll_hist":  [dict(r) for r in bankroll_hist],
         }
