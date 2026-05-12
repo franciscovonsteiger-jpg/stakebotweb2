@@ -92,6 +92,28 @@ async def init_db():
             INSERT INTO usuarios (email, username, password_hash, plan)
             VALUES ($1, $2, $3, 'admin') ON CONFLICT DO NOTHING
         """, admin_email, "admin", ph)
+        # Migración: agregar columnas nuevas si no existen
+        migraciones = [
+            "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS odds_ref FLOAT",
+            "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS odds_real FLOAT",
+            "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS odds_cashout FLOAT",
+            "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS es_cashout BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS bankroll_antes FLOAT",
+            "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS bankroll_despues FLOAT",
+            "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS fecha_resultado TIMESTAMPTZ",
+            "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS mercado TEXT",
+            "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS liga TEXT",
+            "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS tipo TEXT DEFAULT 'value'",
+            "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS es_gold BOOLEAN DEFAULT FALSE",
+            "CREATE TABLE IF NOT EXISTS bankroll_historial (id SERIAL PRIMARY KEY, usuario_id INTEGER REFERENCES usuarios(id), monto FLOAT NOT NULL, tipo TEXT NOT NULL, descripcion TEXT, fecha TIMESTAMPTZ DEFAULT NOW())",
+        ]
+        for sql in migraciones:
+            try:
+                await conn.execute(sql)
+            except Exception as e:
+                log.warning(f"Migración: {e}")
+        await conn.execute("UPDATE historial_picks SET odds_ref=odds WHERE odds_ref IS NULL AND odds IS NOT NULL")
+
     log.info("Base de datos inicializada")
 
 def hash_password(password: str) -> str:
