@@ -118,6 +118,23 @@ async def init_db():
                 log.warning(f"Migración: {e}")
         await conn.execute("UPDATE historial_picks SET odds_ref=odds WHERE odds_ref IS NULL AND odds IS NOT NULL")
 
+        # Migración automática: actualizar stakes guardados en USD al bankroll del usuario
+        try:
+            usuarios = await conn.fetch("SELECT id, bankroll FROM usuarios WHERE bankroll > 1000")
+            for u in usuarios:
+                bankroll = float(u["bankroll"])
+                await conn.execute("""
+                    UPDATE historial_picks
+                    SET stake_usd = ROUND((stake_usd / COALESCE(bankroll_engine, 1000) * $1)::numeric, 2),
+                        bankroll_engine = $1
+                    WHERE usuario_id = $2
+                    AND (bankroll_engine IS NULL OR bankroll_engine <= 1000)
+                    AND stake_usd < 1000
+                """, bankroll, u["id"])
+            log.info("Migración de stakes completada")
+        except Exception as e:
+            log.warning(f"Migración stakes: {e}")
+
     log.info("Base de datos inicializada")
 
 def hash_password(password: str) -> str:
