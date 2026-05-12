@@ -394,7 +394,16 @@ def escanear_mercado(bankroll_usuario: float = None) -> dict:
     for i, p in enumerate(candidatos):
         if i < MAX_GOLD_TIPS: p.es_gold = True
 
-    gold_picks = [p for p in all_value if p.es_gold]  # Solo los Gold Tips
+    # Deduplicar Gold Tips — un solo pick por evento (el de mayor gold_score)
+    seen_eventos = {}
+    for p in all_value:
+        if p.es_gold:
+            if p.evento not in seen_eventos:
+                seen_eventos[p.evento] = p
+            elif p.gold_score > seen_eventos[p.evento].gold_score:
+                seen_eventos[p.evento] = p
+    gold_picks = list(seen_eventos.values())
+    gold_picks.sort(key=lambda p: p.gold_score, reverse=True)
 
     # ── En vivo — top 5 ────────────────────────────────────────────────────────
     all_vivo.sort(key=lambda p: p.gold_score, reverse=True)
