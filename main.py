@@ -834,6 +834,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 .b-green{background:var(--green-bg);color:var(--green)}
 .b-red{background:var(--red-bg);color:var(--red)}
 .b-amber{background:var(--amber-bg);color:var(--amber)}
+.b-red{background:var(--red-bg);color:var(--red)}
 .b-gray{background:var(--bg3);color:var(--text2)}
 .hist-table{width:100%;border-collapse:collapse;font-size:13px}
 .hist-table th{text-align:left;padding:8px 10px;color:var(--text2);font-size:11px;border-bottom:1px solid var(--border);text-transform:uppercase;letter-spacing:.3px}
@@ -1739,15 +1740,37 @@ async function loadUser(){
   const pl={'free':'Gratuito','premium':'Premium','admin':'Admin'};
   const pc={'free':'b-gray','premium':'b-violet','admin':'b-blue'};
   let planLabel = pl[USER.plan]||USER.plan;
+  let planClass = pc[USER.plan]||'b-gray';
+
   if(USER.plan==='premium' && USER.fecha_vencimiento){
     const venc = new Date(USER.fecha_vencimiento);
     const hoy  = new Date();
     const dias = Math.ceil((venc-hoy)/(1000*60*60*24));
-    if(dias<=3) planLabel += ' ⚠ '+dias+'d';
-    else planLabel += ' · '+venc.toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit'});
+    if(dias<=0){
+      planLabel = 'Plan vencido';
+      planClass = 'b-red';
+    } else if(dias<=2){
+      planLabel = '⏰ Premium · '+dias+'d restantes';
+      planClass = 'b-amber';
+    } else if(dias<=7){
+      planLabel = 'Premium · '+dias+' días';
+      planClass = 'b-violet';
+    } else {
+      const fechaStr = venc.toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit'});
+      planLabel = 'Premium · vence '+fechaStr;
+      planClass = 'b-violet';
+    }
+  } else if(USER.plan==='free'){
+    if(USER.trial_usado){
+      planLabel = 'Gratis · activá Premium';
+    } else {
+      planLabel = 'Gratis · 7 días de prueba';
+    }
+    planClass = 'b-gray';
   }
+
   document.getElementById('plan-badge').textContent=planLabel;
-  document.getElementById('plan-badge').className='badge '+(pc[USER.plan]||'b-gray');
+  document.getElementById('plan-badge').className='badge '+planClass;
   document.getElementById('freemium-banner').style.display=USER.plan==='free'?'flex':'none';
   if(USER.plan==='free') document.getElementById('btn-scan').style.display='none';
   if(USER.plan==='admin') document.getElementById('btn-admin').style.display='inline-flex';
