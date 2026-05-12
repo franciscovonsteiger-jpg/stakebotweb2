@@ -235,6 +235,13 @@ async def ajustar_bankroll_ep(request: Request):
         data.get("tipo","ajuste"), data.get("descripcion","")
     ))
 
+@app.post("/api/me/bankroll/revertir/{historial_id}")
+async def revertir_ajuste_ep(historial_id: int, request: Request):
+    user = await require_auth(request)
+    if not user: return JSONResponse({"ok": False}, status_code=401)
+    from core.database import revertir_ajuste
+    return JSONResponse(await revertir_ajuste(user["id"], historial_id))
+
 @app.get("/api/picks")
 async def get_picks(request: Request):
     user = await require_auth(request)
@@ -596,6 +603,10 @@ body{background:var(--bg);background-image:radial-gradient(ellipse at 20% 50%,rg
     ✅ Podés renovar antes de que venza para no perder los picks.
   </div>
 
+  <div class="card" id="historial-bankroll-card" style="margin-top:16px;display:none">
+    <div class="card-title">📋 Historial de movimientos de bankroll</div>
+    <div id="historial-bankroll-lista"></div>
+  </div>
   <a href="/" class="btn-back">← Volver al dashboard</a>
 </div>
 <script>
@@ -788,6 +799,14 @@ select,input{padding:7px 10px;border-radius:8px;border:1px solid var(--border);b
 <script>
 function getToken(){return localStorage.getItem('sb_token')||sessionStorage.getItem('sb_token')||'';}
 function authH(){const t=getToken();return t?{'Authorization':'Bearer '+t,'Content-Type':'application/json'}:{'Content-Type':'application/json'};}
+async function revertirAjuste(id){
+  if(!confirm('¿Revertir este movimiento? El bankroll volverá al valor anterior.')) return;
+  const r=await aFetch('/api/me/bankroll/revertir/'+id,{method:'POST'});
+  const d=await r.json();
+  if(d.ok){alert('✓ Revertido. Nuevo bankroll: '+Math.round(d.bankroll_nuevo).toLocaleString('es-AR'));cargarDatos();}
+  else alert('Error: '+(d.error||'desconocido'));
+}
+
 async function cargarDatos(){
   try{
     const[ru,ri]=await Promise.all([
@@ -992,7 +1011,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 <div class="modal-bg" id="modal-ajuste" style="display:none" onclick="if(event.target===this)hideAjuste()">
   <div class="modal">
     <div style="font-size:16px;font-weight:600;margin-bottom:18px;color:var(--blue)" id="modal-title">Ajustar Bankroll</div>
-    <div class="mfield"><label>Monto (USD)</label><input type="number" id="aj-monto" min="0" step="0.01" placeholder="ej: 500"></div>
+    <div class="mfield"><label id="aj-monto-label">Monto</label><input type="number" id="aj-monto" min="0" step="0.01" placeholder="ej: 500"></div>
     <div class="mfield"><label>Moneda</label>
       <select id="aj-moneda">
         <option value="USD">USD</option>
@@ -1271,6 +1290,25 @@ function renderAll(){
   document.getElementById('bankroll-val').textContent=fmtMilesRaw(DATA.bankroll);
   const enJuego = DATA.mes?.invertido_pendiente || DATA.todo?.invertido_pendiente || 0;
   const disponible = DATA.bankroll - enJuego;
+  // Historial bankroll
+  const bkhist = DATA.bankroll_hist||[];
+  const bhcard = document.getElementById('historial-bankroll-card');
+  if(bkhist.length && bhcard){
+    bhcard.style.display='block';
+    document.getElementById('historial-bankroll-lista').innerHTML=bkhist.map(h=>`
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--border);font-size:13px;flex-wrap:wrap;gap:8px">
+        <div>
+          <span style="color:${h.monto>=0?'var(--teal)':'var(--red)'};font-weight:600">${h.monto>=0?'+':''}${Math.round(h.monto).toLocaleString('es-AR')}</span>
+          <span style="color:var(--text2);margin-left:8px">${h.tipo}</span>
+          ${h.descripcion?`<span style="color:var(--text3);font-size:11px;margin-left:8px">${h.descripcion}</span>`:''}
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:11px;color:var(--text3)">${h.fecha?new Date(h.fecha).toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):''}</span>
+          ${h.tipo!=='pick_colocado'&&h.tipo!=='resultado_pick'?`<button class="btn" style="font-size:11px;padding:3px 10px;color:var(--red)" onclick="revertirAjuste(${h.id})">↩ Revertir</button>`:''}
+        </div>
+      </div>`).join('')
+  }
+
   document.getElementById('moneda-val').innerHTML=
     mon +
     (enJuego > 0
@@ -1291,9 +1329,19 @@ function renderAll(){
 // Modal ajuste bankroll
 function showAjuste(tipo){
   ajusteTipo=tipo;
-  const titles={'deposito':'+ Agregar fondos al bankroll','retiro':'− Retirar fondos','ajuste':'✏️ Ajuste manual de bankroll'};
+  const titles={
+    'deposito':'+ Agregar fondos al bankroll',
+    'retiro':'− Retirar fondos',
+    'ajuste':'✏️ Establecer bankroll actual'
+  };
+  const labels={
+    'deposito':'Monto a agregar',
+    'retiro':'Monto a retirar',
+    'ajuste':'Nuevo bankroll total (reemplaza el actual)'
+  };
   document.getElementById('modal-title').textContent=titles[tipo]||'Ajustar Bankroll';
-  document.getElementById('aj-monto').value='';
+  document.getElementById('aj-monto-label').textContent=labels[tipo]||'Monto';
+  document.getElementById('aj-monto').value= tipo==='ajuste'?(DATA?.bankroll||''):'';
   document.getElementById('aj-desc').value='';
   document.getElementById('ajuste-msg').textContent='';
   document.getElementById('modal-ajuste').style.display='flex';
@@ -1354,6 +1402,14 @@ async function guardarManual(){
     msg.style.color='var(--red)';
     msg.textContent=d.error||'Error al guardar';
   }
+}
+
+async function revertirAjuste(id){
+  if(!confirm('¿Revertir este movimiento? El bankroll volverá al valor anterior.')) return;
+  const r=await aFetch('/api/me/bankroll/revertir/'+id,{method:'POST'});
+  const d=await r.json();
+  if(d.ok){alert('✓ Revertido. Nuevo bankroll: '+Math.round(d.bankroll_nuevo).toLocaleString('es-AR'));cargarDatos();}
+  else alert('Error: '+(d.error||'desconocido'));
 }
 
 async function cargarDatos(){
