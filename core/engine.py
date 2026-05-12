@@ -15,6 +15,7 @@ MIN_EDGE_VIVO = 0.08
 MAX_GOLD_TIPS = int(os.getenv("MAX_GOLD_TIPS", 5))
 VENTANA_HORAS = int(os.getenv("VENTANA_HORAS", 48))
 MIN_SURE_PROB = float(os.getenv("MIN_SURE_PROB", 0.85))
+TZ_OFFSET    = int(os.getenv("TZ_OFFSET", -3))   # Offset horario local (ej: -3 Argentina, -5 Colombia/Peru)
 BASE_URL      = "https://api.the-odds-api.com/v4"
 
 MARKETS_BY_SPORT = {
@@ -85,7 +86,7 @@ def horas_hasta(commence: str) -> float:
 def format_hora(commence: str, horas: float) -> str:
     try:
         dt     = datetime.fromisoformat(commence.replace("Z", "+00:00"))
-        dt_arg = dt.astimezone(timezone(timedelta(hours=-3)))
+        dt_arg = dt.astimezone(timezone(timedelta(hours=TZ_OFFSET)))
         fecha  = dt_arg.strftime("%d/%m")
         hora   = dt_arg.strftime("%H:%M")
         if horas < 0:    cuando = f"En curso"
