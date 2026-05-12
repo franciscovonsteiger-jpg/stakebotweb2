@@ -785,43 +785,61 @@ function depEmoji(d){return{Fútbol:'⚽',Tenis:'🎾',Básquet:'🏀',Esports:'
 // ── Sure Bet card ──────────────────────────────────────────────────────────────
 function renderSureCard(s){
   const isPrem=USER&&USER.plan!=='free';
+  // Niveles de confianza → colores
+  const nivelColor = s.nivel_confianza==='EXTREMA'?'var(--teal)':s.nivel_confianza==='MUY ALTA'?'var(--blue)':'var(--violet)';
+  const nivelIcon  = s.nivel_confianza==='EXTREMA'?'🔥':s.nivel_confianza==='MUY ALTA'?'⚡':'✓';
   return `<div class="sure-card">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
       <div style="flex:1;min-width:140px">
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:5px">
-          <span class="badge b-teal" style="font-size:10px">SURE BET</span>
+          <span class="badge b-teal" style="font-size:10px">ALTA CONFIANZA</span>
           <span class="badge b-gray" style="font-size:10px">${depEmoji(s.deporte)} ${s.deporte}</span>
           <span style="font-size:10px;color:var(--text2)">${s.liga}</span>
         </div>
         <div style="font-size:14px;font-weight:600;margin-bottom:2px">${s.evento}</div>
-        <div style="font-size:11px;color:var(--text2)">${s.mercado} ${s.hora_local?'· 🕐 '+s.hora_local:''}</div>
+        <div style="font-size:11px;color:var(--text2)">${s.mercado||'Resultado'} ${s.hora_local?'· 🕐 '+s.hora_local:''}</div>
       </div>
       <div style="text-align:right">
-        <div class="sure-roi">+${fmt(s.roi_garantizado)}%</div>
-        <div class="sure-roi-label">ROI garantizado</div>
-        ${isPrem?`<div style="font-size:11px;color:var(--teal);margin-top:4px">+${fmtUSD(s.ganancia_garantizada)} USD</div>`:''}
+        <div class="sure-roi" style="color:${nivelColor}">${fmt(s.confianza_pct,1)}%</div>
+        <div class="sure-roi-label">confianza del modelo</div>
+        <div style="font-size:11px;margin-top:3px;color:${nivelColor}">${nivelIcon} ${s.nivel_confianza||'ALTA'}</div>
       </div>
     </div>
     ${isPrem?`
-    <div class="sure-legs">
-      <div class="sure-leg">
-        <div class="sure-leg-pick">${s.pick_a}</div>
-        <div class="sure-leg-detail">en ${s.casa_a}</div>
-        <div class="sure-leg-odds">@${fmt(s.odds_a,2)}</div>
-        <div style="font-size:11px;color:var(--text2);margin-top:4px">Stake: <strong style="color:var(--text)">${fmtUSD(s.stake_a)}</strong></div>
+    <div style="background:var(--bg3);border-radius:var(--radius-sm);padding:12px;margin-top:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+        <div>
+          <div style="font-size:13px;font-weight:600;color:var(--text)">${s.equipo_pick}</div>
+          <div style="font-size:11px;color:var(--text2)">Mejor cuota disponible</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:20px;font-weight:700;color:var(--blue)">@${fmt(s.odds_ref,2)}</div>
+          <div style="font-size:11px;color:var(--text2)">Stake sugerido: <strong style="color:var(--text)">$${fmt(s.stake_usd,2)}</strong></div>
+        </div>
       </div>
-      <div class="sure-leg">
-        <div class="sure-leg-pick">${s.pick_b}</div>
-        <div class="sure-leg-detail">en ${s.casa_b}</div>
-        <div class="sure-leg-odds">@${fmt(s.odds_b,2)}</div>
-        <div style="font-size:11px;color:var(--text2);margin-top:4px">Stake: <strong style="color:var(--text)">${fmtUSD(s.stake_b)}</strong></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:11px">
+        <div style="text-align:center;padding:6px;background:var(--bg2);border-radius:6px">
+          <div style="color:var(--text2);margin-bottom:2px">Pinnacle</div>
+          <div style="font-weight:600;color:var(--text)">${fmt(s.prob_pinnacle*100,1)}%</div>
+        </div>
+        <div style="text-align:center;padding:6px;background:var(--bg2);border-radius:6px">
+          <div style="color:var(--text2);margin-bottom:2px">Consensus</div>
+          <div style="font-weight:600;color:var(--text)">${fmt(s.prob_consensus*100,1)}%</div>
+        </div>
+        <div style="text-align:center;padding:6px;background:var(--bg2);border-radius:6px">
+          <div style="color:var(--text2);margin-bottom:2px">Modelo</div>
+          <div style="font-weight:600;color:${nivelColor}">${fmt(s.prob_modelo*100,1)}%</div>
+        </div>
       </div>
     </div>
-    <div style="margin-top:10px;padding:8px 12px;background:var(--teal-bg);border-radius:var(--radius-sm);font-size:12px;color:var(--teal);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px">
-      <span>Inversión total: <strong>${fmtUSD(s.inversion_total)}</strong></span>
-      <span>Ganancia mínima garantizada: <strong>+${fmtUSD(s.ganancia_garantizada)}</strong></span>
+    <div style="margin-top:10px;padding:8px 12px;background:var(--teal-bg);border-radius:var(--radius-sm);font-size:11px;color:var(--teal)">
+      📊 Señales: ${s.señales||s.senales||'Análisis profundo del mercado'}
+    </div>
+    <div style="margin-top:8px;padding:8px 12px;background:var(--violet-bg);border-radius:var(--radius-sm);font-size:11px;color:var(--violet);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <span>Ganancia potencial: <strong>+$${fmt(s.ganancia_pot,2)}</strong></span>
+      <span>ROI: <strong>+${fmt(s.roi_pct,2)}%</strong></span>
     </div>`:`
-    <div class="lock-row">🔒 Detalle de stakes disponible en Plan Premium</div>`}
+    <div class="lock-row">🔒 Detalle de probabilidades y stake en Plan Premium</div>`}
   </div>`;
 }
 
@@ -858,7 +876,7 @@ function renderValueCard(p){
         <div><div class="num-label">Ganancia pot.</div><div class="num-val" style="color:var(--violet)">+${fmtUSD(p.ganancia_pot)}</div></div>
         <div><div class="num-label">ROI bankroll</div><div class="num-val" style="color:var(--teal)">${fmtPct(p.roi_diario_pct)}</div></div>
       </div>
-      <button class="btn" style="font-size:12px" onclick="marcar(this,p)">✓ Colocado</button>
+      <button class="btn" style="font-size:12px" onclick="marcar(this,window._picks['${p.id}'])">✓ Colocado</button>
     </div>`:`<div class="lock-row">🔒 Stake y ROI en Plan Premium</div>`}
   </div>`;
 }
@@ -925,7 +943,17 @@ function updateMetrics(){
   document.getElementById('m-ventana').textContent='próximas '+(DATA.ventana_horas||36)+'hs';
 }
 
-async function marcar(btn,pick){btn.disabled=true;btn.textContent='Guardando...';try{if(pick)await aFetch('/api/picks/colocar',{method:'POST',body:JSON.stringify(pick)});}catch(e){}btn.textContent='✓ Colocado';btn.style.color='var(--teal)';btn.style.borderColor='var(--teal)';}
+async function marcar(btn,pick){
+  btn.disabled=true;btn.textContent='Guardando...';
+  try{
+    if(pick){
+      const r=await aFetch('/api/picks/colocar',{method:'POST',body:JSON.stringify(pick)});
+      const d=await r.json();
+      if(d.ok){btn.textContent='✓ Colocado';btn.style.color='var(--teal)';btn.style.borderColor='var(--teal)';}
+      else{btn.textContent='✓ Colocado';btn.style.color='var(--teal)';btn.disabled=true;}
+    }
+  }catch(e){btn.textContent='✓ Colocado';btn.style.color='var(--teal)';btn.disabled=true;}
+}
 
 async function loadUser(){
   const r=await aFetch('/api/me');
