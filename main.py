@@ -190,6 +190,18 @@ async def colocar_pick(request: Request):
         log.error(f"Error en colocar_pick: {e}")
         return JSONResponse({"ok":False,"error":str(e)}, status_code=500)
 
+@app.post("/api/picks/manual")
+async def pick_manual(request: Request):
+    user = await require_auth(request)
+    if not user: return JSONResponse({"ok":False}, status_code=401)
+    try:
+        data = await request.json()
+        from core.database import guardar_pick_manual
+        return JSONResponse(await guardar_pick_manual(user["id"], data))
+    except Exception as e:
+        log.error(f"Error pick_manual: {e}")
+        return JSONResponse({"ok":False,"error":str(e)}, status_code=500)
+
 @app.post("/api/picks/{pick_id}/resultado")
 async def resultado_pick(pick_id: int, request: Request):
     user = await require_auth(request)
@@ -598,6 +610,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 <div class="topbar">
   <div class="logo">📈 InvestiaBet — Mis Stats</div>
   <div style="display:flex;gap:8px">
+    <button class="btn-grad" onclick="showManual()" style="font-size:12px;padding:7px 14px">+ Pick manual</button>
     <button class="btn" onclick="window.location.href='/'">← Dashboard</button>
     <button class="btn" onclick="doLogout()">Salir</button>
   </div>
@@ -656,6 +669,49 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
       <button class="btn-grad" style="flex:1" onclick="confirmarAjuste()">Confirmar</button>
     </div>
     <div id="ajuste-msg" style="font-size:12px;margin-top:8px;text-align:center"></div>
+  </div>
+</div>
+
+<!-- Modal pick manual -->
+<div class="modal-bg" id="modal-manual" style="display:none" onclick="if(event.target===this)hideManual()">
+  <div class="modal" style="max-width:480px">
+    <div style="font-size:16px;font-weight:600;margin-bottom:18px;color:var(--violet)">+ Agregar pick manual</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="mfield" style="grid-column:1/-1"><label>Evento *</label><input type="text" id="man-evento" placeholder="ej: Texas Rangers vs Arizona Diamondbacks"></div>
+      <div class="mfield" style="grid-column:1/-1"><label>Pick colocado *</label><input type="text" id="man-pick" placeholder="ej: Arizona Diamondbacks"></div>
+      <div class="mfield"><label>Deporte</label>
+        <select id="man-deporte">
+          <option value="Béisbol">Béisbol</option>
+          <option value="Fútbol">Fútbol</option>
+          <option value="Básquet">Básquet</option>
+          <option value="Tenis">Tenis</option>
+          <option value="MMA">MMA</option>
+          <option value="Esports">Esports</option>
+          <option value="Otro">Otro</option>
+        </select>
+      </div>
+      <div class="mfield"><label>Liga</label><input type="text" id="man-liga" placeholder="ej: MLB"></div>
+      <div class="mfield"><label>Cuota colocada *</label><input type="number" id="man-odds" step="0.01" min="1.01" placeholder="ej: 1.94"></div>
+      <div class="mfield"><label>Stake (ARS o USD) *</label><input type="number" id="man-stake" step="100" min="0" placeholder="ej: 50000"></div>
+      <div class="mfield" style="grid-column:1/-1"><label>Resultado</label>
+        <select id="man-estado" onchange="document.getElementById('co-field').style.display=this.value==='cashout'?'block':'none'">
+          <option value="pendiente">Pendiente</option>
+          <option value="ganado">Ganó ✓</option>
+          <option value="perdido">Perdió ✗</option>
+          <option value="cashout">Cash Out 💸</option>
+          <option value="void">Void —</option>
+        </select>
+      </div>
+      <div class="mfield" style="grid-column:1/-1;display:none" id="co-field">
+        <label>Cuota de Cash Out</label>
+        <input type="number" id="man-odds-co" step="0.01" min="1.01" placeholder="ej: 2.10">
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:16px">
+      <button class="btn" style="flex:1" onclick="hideManual()">Cancelar</button>
+      <button class="btn-grad" style="flex:1" onclick="guardarManual()">Guardar pick</button>
+    </div>
+    <div id="manual-msg" style="font-size:12px;margin-top:8px;text-align:center"></div>
   </div>
 </div>
 
@@ -886,6 +942,43 @@ async function confirmarAjuste(){
     setTimeout(()=>{hideAjuste();cargarDatos();},1500);
   } else {
     msg.style.color='var(--red)';msg.textContent=d.error||'Error';
+  }
+}
+
+// ── Modal pick manual ─────────────────────────────────────────────────────────
+function showManual(){document.getElementById('modal-manual').style.display='flex';}
+function hideManual(){document.getElementById('modal-manual').style.display='none';document.getElementById('manual-msg').textContent='';}
+
+async function guardarManual(){
+  const estado = document.getElementById('man-estado').value;
+  const esCashout = estado === 'cashout';
+  const data = {
+    evento:       document.getElementById('man-evento').value,
+    equipo_pick:  document.getElementById('man-pick').value,
+    deporte:      document.getElementById('man-deporte').value,
+    liga:         document.getElementById('man-liga').value,
+    odds_real:    parseFloat(document.getElementById('man-odds').value)||0,
+    odds_cashout: esCashout?parseFloat(document.getElementById('man-odds-co').value)||0:0,
+    stake_usd:    parseFloat(document.getElementById('man-stake').value)||0,
+    estado:       estado,
+    tipo:         'value',
+  };
+  if(!data.evento||!data.equipo_pick||!data.odds_real||!data.stake_usd){
+    document.getElementById('manual-msg').style.color='var(--red)';
+    document.getElementById('manual-msg').textContent='Completá los campos obligatorios';
+    return;
+  }
+  const r = await aFetch('/api/picks/manual',{method:'POST',body:JSON.stringify(data)});
+  const d = await r.json();
+  const msg = document.getElementById('manual-msg');
+  if(d.ok){
+    msg.style.color='var(--teal)';
+    const pnlTxt = d.pnl!=null?(d.pnl>=0?'+$'+d.pnl.toFixed(2):'-$'+Math.abs(d.pnl).toFixed(2)):'pendiente';
+    msg.textContent='✓ Pick guardado · P&L: '+pnlTxt+(d.bankroll_nuevo?' · Bankroll: $'+d.bankroll_nuevo.toFixed(2):'');
+    setTimeout(()=>{hideManual();cargarDatos();},2000);
+  } else {
+    msg.style.color='var(--red)';
+    msg.textContent=d.error||'Error al guardar';
   }
 }
 
