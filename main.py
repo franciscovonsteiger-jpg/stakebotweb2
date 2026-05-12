@@ -395,6 +395,13 @@ async def pick_manual(request: Request):
         log.error(f"Error pick_manual: {e}")
         return JSONResponse({"ok":False,"error":str(e)}, status_code=500)
 
+@app.delete("/api/picks/{pick_id}")
+async def eliminar_pick_ep(pick_id: int, request: Request):
+    user = await require_auth(request)
+    if not user: return JSONResponse({"ok":False}, status_code=401)
+    from core.database import eliminar_pick
+    return JSONResponse(await eliminar_pick(pick_id, user["id"]))
+
 @app.post("/api/picks/{pick_id}/resultado")
 async def resultado_pick(pick_id: int, request: Request):
     user = await require_auth(request)
@@ -1161,6 +1168,7 @@ function renderPendiente(p){
         <button class="rbtn perdido" onclick="marcarResultado(${id},'perdido')">✗ Perdió</button>
         <button class="rbtn cashout" onclick="toggleCashout(${id})">💸 Cash Out</button>
         <button class="rbtn" onclick="marcarResultado(${id},'void')">— Void</button>
+        <button class="rbtn" onclick="eliminarPick(${id})" style="color:var(--red);border-color:rgba(239,68,68,.3);margin-left:auto">🗑 Eliminar</button>
       </div>
     </div>
   </div>`;
@@ -1429,6 +1437,17 @@ async function revertirAjuste(id){
   const d=await r.json();
   if(d.ok){alert('✓ Revertido. Nuevo bankroll: '+Math.round(d.bankroll_nuevo).toLocaleString('es-AR'));cargarDatos();}
   else alert('Error: '+(d.error||'desconocido'));
+}
+
+async function eliminarPick(id){
+  if(!confirm('¿Eliminar este pick? El stake se devolverá al bankroll.')) return;
+  const r=await aFetch('/api/picks/'+id,{method:'DELETE'});
+  const d=await r.json();
+  if(d.ok){
+    const el=document.getElementById('pend-'+id);
+    if(el) el.innerHTML=`<div style="padding:10px;color:var(--text2);font-size:13px">✓ Pick eliminado · Bankroll restaurado: $${Math.round(d.bankroll_nuevo).toLocaleString('es-AR')}</div>`;
+    setTimeout(cargarDatos,1500);
+  } else alert('Error: '+(d.error||'desconocido'));
 }
 
 async function cargarDatos(){
