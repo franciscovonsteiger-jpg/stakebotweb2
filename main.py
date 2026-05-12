@@ -401,8 +401,6 @@ async def admin_invs(request: Request):
 
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
-    user = await require_auth(request)
-    if not user: return RedirectResponse("/login")
     return HTMLResponse(DASHBOARD_HTML)
 
 @app.get("/login", response_class=HTMLResponse)
@@ -410,8 +408,6 @@ async def login_page(): return HTMLResponse(LOGIN_HTML)
 
 @app.get("/estadisticas", response_class=HTMLResponse)
 async def stats_page(request: Request):
-    user = await require_auth(request)
-    if not user: return RedirectResponse("/login")
     return HTMLResponse(STATS_HTML)
 
 @app.get("/admin", response_class=HTMLResponse)
@@ -638,7 +634,14 @@ async function doLogin(){
       body:JSON.stringify({email:document.getElementById('l-email').value.trim().toLowerCase(),
         password:document.getElementById('l-pass').value})});
     const d=await r.json();
-    if(d.ok){if(d.token)localStorage.setItem('sb_token',d.token);window.location.href=d.plan==='admin'?'/admin':'/';}
+    if(d.ok){
+      if(d.token){
+        localStorage.setItem('sb_token',d.token);
+        // También guardar en sessionStorage como backup
+        sessionStorage.setItem('sb_token',d.token);
+      }
+      window.location.href=d.plan==='admin'?'/admin':'/';
+    }
     else{const el=document.getElementById('login-msg');el.className='msg msg-err';el.textContent=d.error||'Email o contraseña incorrectos';}
   }catch(e){document.getElementById('login-msg').className='msg msg-err';document.getElementById('login-msg').textContent='Error de conexión';}
   btn.disabled=false;btn.textContent='Ingresar';
@@ -730,7 +733,7 @@ select,input{padding:7px 10px;border-radius:8px;border:1px solid var(--border);b
   </div>
 </div>
 <script>
-function getToken(){return localStorage.getItem('sb_token')||'';}
+function getToken(){return localStorage.getItem('sb_token')||sessionStorage.getItem('sb_token')||'';}
 function authH(){const t=getToken();return t?{'Authorization':'Bearer '+t,'Content-Type':'application/json'}:{'Content-Type':'application/json'};}
 async function cargarDatos(){
   try{
@@ -998,9 +1001,24 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 
 <script>
 let DATA=null, currentTab='mes', ajusteTipo='deposito';
-function getToken(){return localStorage.getItem('sb_token')||'';}
-function authH(){const t=getToken();return t?{'Authorization':'Bearer '+t,'Content-Type':'application/json'}:{'Content-Type':'application/json'};}
-async function aFetch(url,opts={}){opts.credentials='include';opts.headers={...authH(),...(opts.headers||{})};return fetch(url,opts);}
+function getToken(){return localStorage.getItem('sb_token')||sessionStorage.getItem('sb_token')||'';}
+function authH(){
+  const t=getToken();
+  const h={'Content-Type':'application/json'};
+  if(t) h['Authorization']='Bearer '+t;
+  return h;
+}
+async function aFetch(url,opts={}){
+  opts.credentials='include';
+  opts.headers={...authH(),...(opts.headers||{})};
+  const r=await fetch(url,opts);
+  // Si 401 y hay token, el token expiró — limpiar y redirigir
+  if(r.status===401){
+    localStorage.removeItem('sb_token');
+    window.location.href='/login';
+  }
+  return r;
+}
 function fmt(n,d=2){return n!=null?Number(n).toFixed(d):'—';}
 let _ratio = 1;
 function fmtMiles(n){
@@ -1497,9 +1515,23 @@ body{background:var(--bg);background-image:radial-gradient(ellipse at 10% 30%,rg
 <script>
 let DATA=null,USER=null,currentTab='todos';
 window._picks={};
-function getToken(){return localStorage.getItem('sb_token')||'';}
-function authH(){const t=getToken();return t?{'Authorization':'Bearer '+t,'Content-Type':'application/json'}:{'Content-Type':'application/json'};}
-async function aFetch(url,opts={}){opts.credentials='include';opts.headers={...authH(),...(opts.headers||{})};return fetch(url,opts);}
+function getToken(){return localStorage.getItem('sb_token')||sessionStorage.getItem('sb_token')||'';}
+function authH(){
+  const t=getToken();
+  const h={'Content-Type':'application/json'};
+  if(t) h['Authorization']='Bearer '+t;
+  return h;
+}
+async function aFetch(url,opts={}){
+  opts.credentials='include';
+  opts.headers={...authH(),...(opts.headers||{})};
+  const r=await fetch(url,opts);
+  if(r.status===401){
+    localStorage.removeItem('sb_token');
+    window.location.href='/login';
+  }
+  return r;
+}
 function fmt(n,d=2){return n!=null?Number(n).toFixed(d):'—';}
 function fmtUSD(n){
   if(n==null) return '—';
@@ -1778,7 +1810,12 @@ function updateMetrics(){
 
 async function loadUser(){
   const r=await aFetch('/api/me');
-  if(!r.ok){window.location.href='/login';return;}
+  if(!r.ok){
+    // Si falla, limpiar token y redirigir
+    localStorage.removeItem('sb_token');
+    window.location.href='/login';
+    return;
+  }
   USER=await r.json();
   const pl={'free':'Gratuito','premium':'Premium','admin':'Admin'};
   const pc={'free':'b-gray','premium':'b-violet','admin':'b-blue'};
