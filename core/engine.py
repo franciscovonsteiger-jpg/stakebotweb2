@@ -389,10 +389,16 @@ def analizar_evento(ev: dict, meta: dict, market_key: str) -> tuple[list, list]:
         roi_v  = round(gan / BANKROLL * 100, 2)
         gscore = gold_score(p_modelo, mejor_odds, edge, horas)
 
-        descartado = ctx.get("descartar", False) or edge < MIN_EDGE
+        # Edge mayor a 40% es casi siempre un error de datos — descartar
+        edge_anomalo = edge > 0.40
+        descartado = ctx.get("descartar", False) or edge < MIN_EDGE or edge_anomalo or mejor_odds < 1.05
         razon = None
         if ctx.get("descartar"):
             razon = ctx["descripcion"]
+        elif edge_anomalo:
+            razon = f"Edge {edge*100:.1f}% anómalo — posible error de datos"
+        elif mejor_odds < 1.05:
+            razon = "Cuota demasiado baja — sin valor"
         elif edge < MIN_EDGE:
             razon = f"Edge {edge*100:.1f}% bajo mínimo"
 
