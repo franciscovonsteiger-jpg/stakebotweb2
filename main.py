@@ -199,12 +199,22 @@ async def do_logout(request: Request, response: Response):
 async def get_me(request: Request):
     user = await require_auth(request)
     if not user: return JSONResponse({"ok": False}, status_code=401)
-    return JSONResponse({"ok":True,"id":user["id"],"email":user["email"],
-        "username":user["username"],"plan":user["plan"],"bankroll":user["bankroll"],
-        "moneda":user["moneda"],"perfil_riesgo":user["perfil_riesgo"],
-        "tg_chat_id":user["tg_chat_id"],"tg_activo":user["tg_activo"],
-        "fecha_vencimiento": user.get("fecha_vencimiento",""),
-        "trial_usado": user.get("trial_usado", False)})
+    try:
+        return JSONResponse({"ok":True,"id":user["id"],"email":user["email"],
+            "username":user["username"],"plan":user["plan"],
+            "bankroll":float(user.get("bankroll") or 1000),
+            "moneda":user.get("moneda") or "USD",
+            "perfil_riesgo":user.get("perfil_riesgo") or "inteligente",
+            "tg_chat_id":user.get("tg_chat_id") or "",
+            "tg_activo":bool(user.get("tg_activo") or False),
+            "fecha_vencimiento": str(user["fecha_vencimiento"]) if user.get("fecha_vencimiento") else "",
+            "trial_usado": bool(user.get("trial_usado") or False)})
+    except Exception as e:
+        log.error(f"Error /api/me: {e}")
+        return JSONResponse({"ok":True,"id":user["id"],"email":user["email"],
+            "username":user["username"],"plan":user["plan"],
+            "bankroll":1000,"moneda":"USD","perfil_riesgo":"inteligente",
+            "tg_chat_id":"","tg_activo":False,"fecha_vencimiento":"","trial_usado":False})
 
 @app.post("/api/me/perfil")
 async def update_perfil_ep(request: Request):
