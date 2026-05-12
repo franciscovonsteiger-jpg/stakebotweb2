@@ -92,10 +92,13 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
                    allow_headers=["*"], allow_credentials=True)
 
 async def require_auth(request: Request):
-    token = request.cookies.get("session_token")
+    # Prioridad: 1) Header Bearer, 2) Cookie
+    token = None
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        token = auth[7:].strip()
     if not token:
-        auth = request.headers.get("Authorization", "")
-        if auth.startswith("Bearer "): token = auth[7:]
+        token = request.cookies.get("session_token")
     if not token: return None
     from core.database import get_user_by_token
     return await get_user_by_token(token)
@@ -177,7 +180,7 @@ async def do_login(request: Request, response: Response):
         resp  = JSONResponse({"ok": True, "plan": result["user"]["plan"],
                               "username": result["user"]["username"], "token": token})
         resp.set_cookie("session_token", token, max_age=30*24*3600,
-                        httponly=False, secure=True, samesite="none", path="/")
+                        httponly=False, secure=False, samesite="lax", path="/")
         return resp
     return JSONResponse(result, status_code=401)
 
