@@ -1091,6 +1091,9 @@ function ctxTag(id){const m={champion_early:['ctx-warn','⚠ Campeón'],relegate
 
 function renderSureCard(s){
   const isPrem=USER&&USER.plan!=='free';
+  const _sidx=Object.keys(window._picks).length;
+  window._picks[_sidx]=s;
+  const _sidxStr=String(_sidx);
   const nc=s.nivel_confianza||'ALTA';
   const ncColor=nc==='EXTREMA'?'var(--teal)':nc==='MUY ALTA'?'var(--blue)':'var(--violet)';
   const ncIcon=nc==='EXTREMA'?'🔥':nc==='MUY ALTA'?'⚡':'✓';
@@ -1125,7 +1128,7 @@ function renderSureCard(s){
         <div style="text-align:center;padding:6px;background:var(--bg2);border-radius:6px"><div style="color:var(--text2);margin-bottom:2px">Consensus</div><div style="font-weight:600">${fmt((s.prob_consensus||0)*100,1)}%</div></div>
         <div style="text-align:center;padding:6px;background:var(--bg2);border-radius:6px"><div style="color:var(--text2);margin-bottom:2px">Modelo</div><div style="font-weight:600;color:${ncColor}">${fmt((s.prob_modelo||0)*100,1)}%</div></div>
       </div>
-      <button class="btn" style="width:100%;font-size:12px;color:var(--teal);border-color:var(--teal-border)" onclick="colocarSure(this,'${s.id.replace(/'/g,"\\'")}')">✓ Colocar en Stake</button>
+      <button class="btn" style="width:100%;font-size:12px;color:var(--teal);border-color:var(--teal-border)" onclick="colocarSure(this,${_sidxStr})">✓ Colocar en Stake</button>
     </div>
     <div style="margin-top:8px;padding:7px 12px;background:var(--teal-bg);border-radius:var(--radius-sm);font-size:11px;color:var(--teal)">📊 ${s.señales||s.senales||'Análisis profundo'}</div>
     <div style="margin-top:6px;padding:7px 12px;background:var(--violet-bg);border-radius:var(--radius-sm);font-size:11px;color:var(--violet);display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px">
@@ -1139,7 +1142,9 @@ function renderValueCard(p){
   const isPrem=USER&&USER.plan!=='free';
   const barW=Math.min(Math.abs(p.edge)/0.15*100,100).toFixed(1);
   const col=edgeColor(p.edge);
-  window._picks[p.id]=p;
+  const _pidx=Object.keys(window._picks).length;
+  window._picks[_pidx]=p;
+  const _pidxStr=String(_pidx);
   return `<div class="pick-card${p.es_gold?' gold':''}">
     <div class="pick-top">
       <div class="pick-info">
@@ -1168,7 +1173,7 @@ function renderValueCard(p){
         <div><div class="num-label">Ganancia pot.</div><div class="num-val" style="color:var(--violet)">+${fmtUSD(p.ganancia_pot)}</div></div>
         <div><div class="num-label">ROI</div><div class="num-val" style="color:var(--teal)">${fmtPct(p.roi_diario_pct)}</div></div>
       </div>
-      <button class="btn" style="font-size:12px" onclick="colocarPick(this,'${p.id.replace(/'/g,"\\'")}')">✓ Colocado en Stake</button>
+      <button class="btn" style="font-size:12px" onclick="colocarPick(this,${_pidxStr})">✓ Colocado en Stake</button>
     </div>`:`<div class="lock-row">🔒 Stake y ROI en Plan Premium</div>`}
   </div>`;
 }
@@ -1176,7 +1181,9 @@ function renderValueCard(p){
 function renderVivoCard(p){
   const isPrem=USER&&USER.plan!=='free';
   const col=p.edge>=0.15?'var(--teal)':p.edge>=0.10?'var(--blue)':'var(--amber)';
-  window._picks[p.id]=p;
+  const _pidx=Object.keys(window._picks).length;
+  window._picks[_pidx]=p;
+  const _pidxStr=String(_pidx);
   return `<div class="pick-card" style="border-color:rgba(239,68,68,.3)">
     <div style="position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--red),var(--amber))"></div>
     <div class="pick-top">
@@ -1203,13 +1210,13 @@ function renderVivoCard(p){
         <div><div class="num-label">Stake</div><div class="num-val" style="color:var(--blue)">${fmtUSD(p.stake_usd)}</div></div>
         <div><div class="num-label">Ganancia pot.</div><div class="num-val" style="color:var(--amber)">+${fmtUSD(p.ganancia_pot)}</div></div>
       </div>
-      <button class="btn" style="font-size:12px;color:var(--red);border-color:rgba(239,68,68,.4)" onclick="colocarPick(this,'${p.id.replace(/'/g,"\\'")}')">⚡ Colocar ahora</button>
+      <button class="btn" style="font-size:12px;color:var(--red);border-color:rgba(239,68,68,.4)" onclick="colocarPick(this,${_pidxStr})">⚡ Colocar ahora</button>
     </div>`:`<div class="lock-row">🔒 Stake en Plan Premium</div>`}
   </div>`;
 }
 
 async function colocarPick(btn,pickId){
-  const pick=window._picks[pickId];
+  const pick=window._picks[pickId] || window._picks[String(pickId)];
   if(!pick){btn.textContent='✓ Colocado';btn.style.color='var(--teal)';btn.disabled=true;return;}
   btn.disabled=true;btn.textContent='Guardando...';
   try{
@@ -1220,7 +1227,7 @@ async function colocarPick(btn,pickId){
 }
 
 async function colocarSure(btn,sureId){
-  const sure=window._picks[sureId];
+  const sure=window._picks[sureId] || window._picks[String(sureId)];
   if(!sure) return;
   btn.disabled=true;btn.textContent='Guardando...';
   try{
@@ -1235,7 +1242,6 @@ function renderSure(){
   document.getElementById('sure-count-label').textContent=sures.length+' encontradas';
   const el=document.getElementById('sure-lista');
   if(!sures.length){el.innerHTML='<div class="empty"><span class="empty-icon">🔍</span>Sin picks de alta confianza.<br><span style="font-size:12px">El motor escanea cada 30 min.</span></div>';return;}
-  sures.forEach(s=>{window._picks[s.id]=s;});
   el.innerHTML=sures.map(renderSureCard).join('');
 }
 
@@ -1362,6 +1368,7 @@ async function fetchData(){
       setTimeout(fetchData,5000);return;
     }
     DATA=d;
+    _pickIdx=0; window._picks={};
     document.getElementById('scan-badge').className='badge b-teal';
     document.getElementById('scan-badge').textContent='● Live';
     document.getElementById('last-scan').textContent=d.ultimo_scan?'Último: '+d.ultimo_scan:'';
