@@ -108,6 +108,8 @@ async def init_db():
             "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS tipo TEXT DEFAULT 'value'",
             "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS es_gold BOOLEAN DEFAULT FALSE",
             "CREATE TABLE IF NOT EXISTS bankroll_historial (id SERIAL PRIMARY KEY, usuario_id INTEGER REFERENCES usuarios(id), monto FLOAT NOT NULL, tipo TEXT NOT NULL, descripcion TEXT, fecha TIMESTAMPTZ DEFAULT NOW())",
+            "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS fecha_vencimiento TIMESTAMPTZ",
+            "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS trial_usado BOOLEAN DEFAULT FALSE",
         ]
         for sql in migraciones:
             try:
@@ -506,6 +508,58 @@ async def guardar_pick_manual(user_id: int, data: dict) -> dict:
         except Exception as e:
             log.error(f"Error guardar_pick_manual: {e}")
             return {"ok": False, "error": str(e)}
+
+
+# ── Vencimientos ──────────────────────────────────────────────────────────────
+
+async def activar_trial(user_id: int) -> dict:
+    """Activa 7 días de prueba premium."""
+    from datetime import datetime, timedelta
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        user = await conn.fetchrow("SELECT trial_usado FROM usuarios WHERE id=$1", user_id)
+        if not user: return {"ok": False, "error": "Usuario no encontrado"}
+        if user["trial_usado"]: return {"ok": False, "error": "Ya usaste el período de prueba"}
+        venc = datetime.now() + timedelta(days=7)
+        await conn.execute("UPDATE usuarios SET plan='premium', fecha_vencimiento=$1, trial_usado=TRUE WHERE id=$2", venc, user_id)
+        return {"ok": True, "vencimiento": venc.isoformat()}
+
+async def activar_premium(user_id: int, dias: int = 30) -> dict:
+    """Activa premium por N días."""
+    from datetime import datetime, timedelta
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        user = await conn.fetchrow("SELECT fecha_vencimiento FROM usuarios WHERE id=$1", user_id)
+        if not user: return {"ok": False, "error": "Usuario no encontrado"}
+        ahora = datetime.now()
+        base  = user["fecha_vencimiento"] if user["fecha_vencimiento"] and user["fecha_vencimiento"].replace(tzinfo=None) > ahora else ahora
+        nuevo = base.replace(tzinfo=None) + timedelta(days=dias)
+        await conn.execute("UPDATE usuarios SET plan='premium', fecha_vencimiento=$1 WHERE id=$2", nuevo, user_id)
+        return {"ok": True, "vencimiento": nuevo.isoformat(), "dias": dias}
+
+async def verificar_vencimientos() -> dict:
+    """Baja a free los que vencieron y retorna lista para notificar."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        vencidos = await conn.fetch("""
+            SELECT id, email, username, tg_chat_id, tg_activo, fecha_vencimiento
+            FROM usuarios WHERE plan='premium'
+            AND fecha_vencimiento IS NOT NULL AND fecha_vencimiento < NOW()
+        """)
+        if vencidos:
+            await conn.execute("""
+                UPDATE usuarios SET plan='free'
+                WHERE plan='premium' AND fecha_vencimiento IS NOT NULL AND fecha_vencimiento < NOW()
+            """)
+        por_vencer = await conn.fetch("""
+            SELECT id, email, username, tg_chat_id, tg_activo, fecha_vencimiento
+            FROM usuarios WHERE plan='premium'
+            AND fecha_vencimiento BETWEEN NOW() AND NOW() + INTERVAL '2 days'
+        """)
+        return {
+            "vencidos":   [serialize_row(dict(r)) for r in vencidos],
+            "por_vencer": [serialize_row(dict(r)) for r in por_vencer],
+        }
 
 # ── Admin ──────────────────────────────────────────────────────────────────────
 
