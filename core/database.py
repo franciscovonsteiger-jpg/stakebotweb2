@@ -224,12 +224,40 @@ async def ajustar_bankroll(user_id: int, monto: float, tipo: str, descripcion: s
         user = await conn.fetchrow("SELECT bankroll FROM usuarios WHERE id=$1", user_id)
         if not user:
             return {"ok": False, "error": "Usuario no encontrado"}
-        nuevo = round(float(user["bankroll"]) + monto, 2)
+        bankroll_antes = float(user["bankroll"])
+
+        if tipo == "ajuste":
+            # Ajuste manual = reemplazar el valor directamente
+            nuevo = round(monto, 2)
+            diferencia = round(nuevo - bankroll_antes, 2)
+        else:
+            # Depósito o retiro = sumar/restar
+            nuevo = round(bankroll_antes + monto, 2)
+            diferencia = monto
+
         await conn.execute("UPDATE usuarios SET bankroll=$1 WHERE id=$2", nuevo, user_id)
-        await conn.execute(
-            "INSERT INTO bankroll_historial (usuario_id, monto, tipo, descripcion) VALUES ($1,$2,$3,$4)",
-            user_id, monto, tipo, descripcion
+        row = await conn.fetchrow(
+            "INSERT INTO bankroll_historial (usuario_id, monto, tipo, descripcion) VALUES ($1,$2,$3,$4) RETURNING id",
+            user_id, diferencia, tipo, descripcion or f"Bankroll anterior: {bankroll_antes}"
         )
+        return {"ok": True, "bankroll_nuevo": nuevo, "historial_id": row["id"]}
+
+async def revertir_ajuste(user_id: int, historial_id: int) -> dict:
+    """Revierte un ajuste de bankroll."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        hist = await conn.fetchrow(
+            "SELECT * FROM bankroll_historial WHERE id=$1 AND usuario_id=$2",
+            historial_id, user_id
+        )
+        if not hist:
+            return {"ok": False, "error": "Ajuste no encontrado"}
+        user = await conn.fetchrow("SELECT bankroll FROM usuarios WHERE id=$1", user_id)
+        bankroll_actual = float(user["bankroll"])
+        # Revertir = deshacer el efecto del ajuste
+        nuevo = round(bankroll_actual - float(hist["monto"]), 2)
+        await conn.execute("UPDATE usuarios SET bankroll=$1 WHERE id=$2", nuevo, user_id)
+        await conn.execute("DELETE FROM bankroll_historial WHERE id=$1", historial_id)
         return {"ok": True, "bankroll_nuevo": nuevo}
 
 # ── Historial picks ────────────────────────────────────────────────────────────
