@@ -1207,7 +1207,7 @@ async function marcarResultado(id, estado){
 
 function renderStats(stats, moneda='USD'){
   if(!stats||!stats.total_colocados) return '<div class="empty"><span class="empty-icon">📊</span>Sin datos aún.<br><span style="font-size:12px">Colocá picks desde el dashboard para ver tus estadísticas.</span></div>';
-  const roiColor = stats.roi>=0?'var(--teal)':'var(--red)';
+  const roiColor = (stats.roi||0)>=0?'var(--teal)':'var(--red)';
   const pnlColor = stats.pnl_total>=0?'var(--teal)':'var(--red)';
   const wr = stats.win_rate||0;
   const wrColor = wr>=60?'var(--teal)':wr>=50?'var(--blue)':wr>=40?'var(--amber)':'var(--red)';
@@ -1219,14 +1219,14 @@ function renderStats(stats, moneda='USD'){
       <div class="roi-bar-wrap"><div class="roi-bar" style="width:${Math.min(wr,100)}%;background:${wrColor}"></div></div>
       <div class="metric-sub">${stats.ganados||0} ✓ · ${stats.perdidos||0} ✗ · ${stats.cashouts||0} 💸</div>
     </div>
-    <div class="metric m-${stats.roi>=0?'green':'red'}">
+    <div class="metric m-${(DATA.roi_acumulado||0)>=0?'green':'red'}">
       <div class="metric-label">ROI acumulado</div>
-      <div class="metric-val" style="color:${roiColor}">${fmtPct(DATA.roi_acumulado)}</div>
+      <div class="metric-val" style="color:${(DATA.roi_acumulado||0)>=0?'var(--teal)':'var(--red)'}">${fmtPct(DATA.roi_acumulado)}</div>
       <div class="metric-sub">desde el inicio · ${DATA.dias_activo||1} día${(DATA.dias_activo||1)>1?'s':''}</div>
     </div>
     <div class="metric m-${(DATA.roi_diario||0)>=0?'green':'red'}">
       <div class="metric-label">ROI diario compuesto</div>
-      <div class="metric-val" style="color:${(DATA.roi_diario||0)>=0?'var(--teal)':'var(--red)';font-size:20px}">${fmtPct(DATA.roi_diario)}</div>
+      <div class="metric-val" style="color:${(DATA.roi_diario||0)>=0?'var(--teal)':'var(--red)'};font-size:20px">${fmtPct(DATA.roi_diario)}</div>
       <div class="metric-sub">promedio por día</div>
     </div>
     <div class="metric m-${stats.pnl_total>=0?'teal':'red'}">
@@ -1314,7 +1314,7 @@ function renderAll(){
   if(!DATA) return;
   const mon = DATA.moneda||'USD';
   _ratio = DATA.ratio || 1;
-  document.getElementById('bankroll-val').textContent=fmtMilesRaw(DATA.bankroll);
+  document.getElementById('bankroll-val').textContent=DATA.bankroll?Math.round(DATA.bankroll).toLocaleString('es-AR'):'—';
   const enJuego = DATA.mes?.invertido_pendiente || DATA.todo?.invertido_pendiente || 0;
   const disponible = DATA.bankroll - enJuego;
   // Historial bankroll
