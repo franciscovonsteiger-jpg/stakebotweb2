@@ -100,6 +100,7 @@ async def init_db():
             "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS odds_cashout FLOAT",
             "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS es_cashout BOOLEAN DEFAULT FALSE",
             "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS bankroll_antes FLOAT",
+            "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS bankroll_engine FLOAT",
             "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS bankroll_despues FLOAT",
             "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS fecha_resultado TIMESTAMPTZ",
             "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS mercado TEXT",
@@ -228,13 +229,16 @@ async def guardar_pick(user_id: int, pick: dict) -> dict:
         bankroll_despues = round(bankroll_antes - stake, 2)  # descontar al colocar
 
         try:
+            # El pick ya viene con stake calculado sobre el bankroll del usuario
+            # Guardamos bankroll_engine para referencia histórica exacta
             result = await conn.execute("""
                 INSERT INTO historial_picks
                     (usuario_id, pick_id, evento, liga, deporte, mercado,
                      equipo_pick, odds_ref, stake_usd, tipo, es_gold, estado,
-                     bankroll_antes, bankroll_despues)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pendiente',$12,$13)
-                ON CONFLICT (usuario_id, pick_id) DO NOTHING
+                     bankroll_antes, bankroll_despues, bankroll_engine)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pendiente',$12,$13,$14)
+                ON CONFLICT (usuario_id, pick_id) DO UPDATE
+                SET estado = EXCLUDED.estado
             """,
                 user_id,
                 pick.get("id",""),
@@ -249,6 +253,7 @@ async def guardar_pick(user_id: int, pick: dict) -> dict:
                 bool(pick.get("es_gold", False)),
                 bankroll_antes,
                 bankroll_despues,
+                bankroll_antes,  # bankroll_engine = bankroll del usuario al momento de colocar
             )
             # Solo descontar si se insertó (no era duplicado)
             if result == "INSERT 0 1":
@@ -361,7 +366,16 @@ async def get_estadisticas(user_id: int) -> dict:
             log.warning(f"bankroll_hist: {e}")
             bankroll_hist = []
 
-        def calcular(picks):
+        def stake_real(p, bankroll_actual):
+            """Devuelve el stake ajustado al bankroll actual del usuario."""
+            be = p.get("bankroll_engine") or p.get("bankroll_antes") or 0
+            su = p.get("stake_usd") or 0
+            if be and be > 0 and su > 0:
+                pct = su / be  # % del bankroll que se apostó
+                return round(bankroll_actual * pct, 2)
+            return su
+
+        def calcular(picks, bk_actual=None):
             resueltos = [p for p in picks if p["estado"] in ("ganado","perdido","void","cashout")]
             pendientes = [p for p in picks if p["estado"] == "pendiente"]
             ganados   = [p for p in resueltos if p["estado"] in ("ganado","cashout")]
@@ -419,8 +433,8 @@ async def get_estadisticas(user_id: int) -> dict:
         return {
             "bankroll":       float(user["bankroll"]) if user else 1000,
             "moneda":         user["moneda"] if user else "USD",
-            "todo":           calcular(todos),
-            "mes":            calcular(mes),
+            "todo":           calcular(todos, float(user["bankroll"]) if user else 1000),
+            "mes":            calcular(mes, float(user["bankroll"]) if user else 1000),
             "pendientes":     [serialize_row(dict(r)) for r in todos if dict(r).get("estado")=="pendiente"],
             "historial":      [serialize_row(dict(r)) for r in todos[:100]],
             "bankroll_hist":  [serialize_row(dict(r)) for r in bankroll_hist],
