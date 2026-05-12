@@ -68,7 +68,21 @@ def picks_para_usuario(user: dict) -> dict:
     vivo     = r.get("picks_vivo", [])
 
     if plan in ("premium", "admin"):
-        gold_vis = gold; sure_vis = sure; vivo_vis = vivo
+        # Recalcular stake según bankroll real del usuario
+        def recalc(picks):
+            result = []
+            for p in picks:
+                if p.get("stake_usd") and p.get("odds_ref"):
+                    # stake_pct del engine original
+                    stake_pct = p.get("stake_pct", 0.05)
+                    nuevo_stake = round(bankroll * stake_pct / 100, 2)
+                    ganancia   = round(nuevo_stake * (p["odds_ref"] - 1), 2)
+                    roi        = round(ganancia / bankroll * 100, 2) if bankroll else 0
+                    result.append({**p, "stake_usd": nuevo_stake, "ganancia_pot": ganancia, "roi_diario_pct": roi})
+                else:
+                    result.append(p)
+            return result
+        gold_vis = recalc(gold); sure_vis = sure; vivo_vis = recalc(vivo)
     else:
         gold_vis = [{**p, "stake_usd": None, "ganancia_pot": None, "roi_diario_pct": None} for p in gold[:3]]
         sure_vis = sure[:2]; vivo_vis = []
@@ -1197,7 +1211,13 @@ function getToken(){return localStorage.getItem('sb_token')||'';}
 function authH(){const t=getToken();return t?{'Authorization':'Bearer '+t,'Content-Type':'application/json'}:{'Content-Type':'application/json'};}
 async function aFetch(url,opts={}){opts.credentials='include';opts.headers={...authH(),...(opts.headers||{})};return fetch(url,opts);}
 function fmt(n,d=2){return n!=null?Number(n).toFixed(d):'—';}
-function fmtUSD(n){return n!=null?'$'+fmt(n,2):'—';}
+function fmtUSD(n){
+  if(n==null) return '—';
+  const mon = USER?.moneda||'USD';
+  if(mon==='ARS') return 'ARS '+Number(n).toLocaleString('es-AR',{minimumFractionDigits:0,maximumFractionDigits:0});
+  if(mon==='USDT') return 'USDT '+fmt(n,2);
+  return '$'+fmt(n,2);
+}
 function fmtPct(n){return n!=null?(n>=0?'+':'')+fmt(n,1)+'%':'—';}
 function dep(d){return{Fútbol:'⚽',Tenis:'🎾',Básquet:'🏀',Esports:'🎮',MMA:'🥊',Béisbol:'⚾'}[d]||'🎯';}
 function edgeColor(e){if(e>=0.12)return'var(--teal)';if(e>=0.07)return'var(--blue)';if(e>=0.04)return'var(--violet)';return'var(--text2)';}
@@ -1345,6 +1365,9 @@ async function colocarPick(btn,pickId){
       btn.style.color='var(--teal)';
       btn.style.borderColor='var(--teal)';
       btn.title='Abrí Mis Stats para confirmar el resultado';
+      if(d.bankroll_nuevo!=null){
+        document.getElementById('m-bank').textContent='$'+Number(d.bankroll_nuevo).toFixed(2);
+      }
     } else {
       console.error('Error guardando pick:', d.error);
       btn.textContent='✓ Colocado (sin guardar)';
