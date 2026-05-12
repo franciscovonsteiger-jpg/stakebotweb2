@@ -199,7 +199,31 @@ def _analizar(ev, meta, market_key, es_vivo=False):
                 for out in mkt["outcomes"]:
                     outcomes_set.add(out["name"])
 
+    # Enriquecer outcomes con punto para mercados Over/Under y Hándicap
+    def enriquecer_outcome(outcome_name, mkt_outcomes):
+        """Agrega el punto al nombre si es Over/Under o hándicap."""
+        for o in mkt_outcomes:
+            if o.get("name") == outcome_name:
+                punto = o.get("point") or o.get("handicap")
+                if punto is not None:
+                    if outcome_name in ("Over", "Under"):
+                        return f"{outcome_name} {punto}"
+                    elif outcome_name not in ("Yes", "No"):
+                        return f"{outcome_name} ({punto:+.1f})" if punto != 0 else outcome_name
+        return outcome_name
+
+    # Obtener outcomes con punto enriquecido
+    outcomes_con_punto = {}
+    for bm in bookmakers:
+        for mkt in bm.get("markets", []):
+            if mkt["key"] == market_key:
+                for out in mkt["outcomes"]:
+                    nombre_orig = out["name"]
+                    nombre_rico = enriquecer_outcome(nombre_orig, mkt["outcomes"])
+                    outcomes_con_punto[nombre_orig] = nombre_rico
+
     for outcome_name in outcomes_set:
+        outcome_display = outcomes_con_punto.get(outcome_name, outcome_name)
         p_pinn = prob_pinnacle(bookmakers, outcome_name, market_key)
         p_cons = prob_consensus(bookmakers, outcome_name, market_key)
         if p_cons is None: continue
@@ -217,10 +241,10 @@ def _analizar(ev, meta, market_key, es_vivo=False):
             stake_s = kelly_stake(p_mod, mejor, KELLY_FRAC, 0.08)
             gan_s   = round(stake_s * (mejor - 1), 2)
             sure_picks.append(SurePick(
-                id=f"sure-{ev['id']}-{market_key}-{outcome_name}".replace(" ","_"),
+                id=f"sure-{ev['id']}-{market_key}-{outcome_display}".replace(" ","_"),
                 tipo="sure", evento=f"{home} vs {away}",
                 deporte=meta["deporte"], liga=meta["nombre"],
-                mercado=mercado_lbl, equipo_pick=outcome_name,
+                mercado=mercado_lbl, equipo_pick=outcome_display,
                 odds_ref=mejor, prob_modelo=round(p_mod,4),
                 prob_pinnacle=round(p_pinn,4) if p_pinn else round(p_cons,4),
                 prob_consensus=round(p_cons,4),
@@ -250,10 +274,10 @@ def _analizar(ev, meta, market_key, es_vivo=False):
         elif edge < min_edge_ok:     razon = f"Edge {edge*100:.1f}% bajo mínimo"
 
         value_picks.append(ValuePick(
-            id=f"{'vivo-' if es_vivo else ''}{ev['id']}-{market_key}-{outcome_name}".replace(" ","_"),
+            id=f"{'vivo-' if es_vivo else ''}{ev['id']}-{market_key}-{outcome_display}".replace(" ","_"),
             tipo="value", evento=f"{home} vs {away}",
             deporte=meta["deporte"], liga=meta["nombre"],
-            mercado=mercado_lbl, equipo_pick=outcome_name,
+            mercado=mercado_lbl, equipo_pick=outcome_display,
             odds_ref=mejor, prob_ajustada=round(p_mod,4),
             edge=round(edge,4), gold_score=gscore,
             stake_usd=stake, ganancia_pot=gan,
