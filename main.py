@@ -843,7 +843,7 @@ function renderStats(stats, moneda='USD'){
     <div class="metric m-${stats.roi>=0?'green':'red'}">
       <div class="metric-label">ROI real</div>
       <div class="metric-val" style="color:${roiColor}">${fmtPct(stats.roi)}</div>
-      <div class="metric-sub">sobre lo invertido</div>
+      <div class="metric-sub">sobre picks resueltos</div>
     </div>
     <div class="metric m-${stats.pnl_total>=0?'teal':'red'}">
       <div class="metric-label">P&L total</div>
@@ -856,9 +856,14 @@ function renderStats(stats, moneda='USD'){
       <div class="metric-sub">${stats.pendientes||0} pendientes</div>
     </div>
     <div class="metric m-violet">
-      <div class="metric-label">Invertido</div>
-      <div class="metric-val" style="color:var(--violet);font-size:18px">$${fmt(stats.invertido_total,0)}</div>
-      <div class="metric-sub">${moneda} apostado</div>
+      <div class="metric-label">En juego (pendiente)</div>
+      <div class="metric-val" style="color:var(--amber);font-size:18px">${Number(stats.invertido_pendiente||0).toLocaleString('es-AR',{maximumFractionDigits:0})}</div>
+      <div class="metric-sub">${moneda} pendiente resultado</div>
+    </div>
+    <div class="metric m-blue">
+      <div class="metric-label">Invertido (resuelto)</div>
+      <div class="metric-val" style="color:var(--blue);font-size:18px">${Number(stats.invertido_resuelto||0).toLocaleString('es-AR',{maximumFractionDigits:0})}</div>
+      <div class="metric-sub">${moneda} ya jugado</div>
     </div>
   </div>
   <div class="two-col">
