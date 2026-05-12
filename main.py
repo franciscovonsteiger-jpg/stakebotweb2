@@ -43,11 +43,48 @@ async def scanner_loop():
         await run_scan_bg()
         await asyncio.sleep(SCAN_INTERVAL)
 
+async def vencimiento_loop():
+    """Verifica vencimientos cada hora y notifica por Telegram."""
+    while True:
+        await asyncio.sleep(3600)  # cada 1 hora
+        try:
+            from core.database import verificar_vencimientos
+            from core.notifier import notificar_owner, send_message
+            result = await verificar_vencimientos()
+            TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN","")
+
+            # Notificar vencidos
+            for u in result.get("vencidos", []):
+                log.info(f"Plan vencido: {u['username']}")
+                notificar_owner(f"⚠️ Plan vencido: @{u['username']} ({u['email']})")
+                if u.get("tg_chat_id") and u.get("tg_activo"):
+                    send_message(TG_TOKEN, u["tg_chat_id"],
+                        f"⏰ <b>Tu acceso Premium a InvestiaBet venció.</b>\n\n"
+                        f"Para renovar y seguir recibiendo Gold Tips y Sure Bets:\n"
+                        f"👉 <b>stakebotweb2-production.up.railway.app/premium</b>\n\n"
+                        f"Alias Mercado Pago: <b>franvons</b>\n"
+                        f"AstroPay: <b>0000177500098073799130</b>\n\n"
+                        f"Enviá el comprobante y te reactivamos en minutos 🚀")
+
+            # Notificar por vencer en 2 días
+            for u in result.get("por_vencer", []):
+                log.info(f"Plan por vencer: {u['username']}")
+                if u.get("tg_chat_id") and u.get("tg_activo"):
+                    venc = u.get("fecha_vencimiento","")[:10] if u.get("fecha_vencimiento") else "pronto"
+                    send_message(TG_TOKEN, u["tg_chat_id"],
+                        f"⏳ <b>Tu Premium vence el {venc}</b>\n\n"
+                        f"Renovalo ahora para no perder los Gold Tips:\n"
+                        f"👉 Alias MP: <b>franvons</b> · AstroPay: <b>0000177500098073799130</b>\n"
+                        f"Enviá el comprobante a @Stakegoldia_bot 💪")
+        except Exception as e:
+            log.error(f"Error vencimiento_loop: {e}")
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from core.database import init_db
     await init_db()
     asyncio.create_task(scanner_loop())
+    asyncio.create_task(vencimiento_loop())
     yield
 
 app = FastAPI(title="InvestiaBet", lifespan=lifespan)
@@ -162,7 +199,9 @@ async def get_me(request: Request):
     return JSONResponse({"ok":True,"id":user["id"],"email":user["email"],
         "username":user["username"],"plan":user["plan"],"bankroll":user["bankroll"],
         "moneda":user["moneda"],"perfil_riesgo":user["perfil_riesgo"],
-        "tg_chat_id":user["tg_chat_id"],"tg_activo":user["tg_activo"]})
+        "tg_chat_id":user["tg_chat_id"],"tg_activo":user["tg_activo"],
+        "fecha_vencimiento": user.get("fecha_vencimiento",""),
+        "trial_usado": user.get("trial_usado", False)})
 
 @app.post("/api/me/perfil")
 async def update_perfil_ep(request: Request):
@@ -214,6 +253,25 @@ async def colocar_pick(request: Request):
     except Exception as e:
         log.error(f"Error en colocar_pick: {e}")
         return JSONResponse({"ok":False,"error":str(e)}, status_code=500)
+
+@app.post("/api/trial")
+async def activar_trial_ep(request: Request):
+    user = await require_auth(request)
+    if not user: return JSONResponse({"ok":False}, status_code=401)
+    from core.database import activar_trial
+    return JSONResponse(await activar_trial(user["id"]))
+
+@app.post("/api/admin/usuario/{user_id}/premium")
+async def admin_activar_premium(user_id: int, request: Request):
+    user = await require_auth(request)
+    if not user or user["plan"]!="admin": return JSONResponse({"ok":False},status_code=403)
+    data = await request.json()
+    from core.database import activar_premium
+    return JSONResponse(await activar_premium(user_id, data.get("dias",30)))
+
+@app.get("/premium", response_class=HTMLResponse)
+async def premium_page(request: Request):
+    return HTMLResponse(PREMIUM_HTML)
 
 @app.post("/api/picks/manual")
 async def pick_manual(request: Request):
@@ -327,6 +385,149 @@ async def admin_page(request: Request):
     return HTMLResponse(ADMIN_HTML)
 
 # ── HTML Pages ─────────────────────────────────────────────────────────────────
+
+
+PREMIUM_HTML = """<!DOCTYPE html>
+<html lang="es"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Activar Premium — InvestiaBet</title>
+<style>
+:root{--bg:#080c14;--bg2:#0d1220;--bg3:#131929;--border:#1e2a3d;--text:#e2e8f4;--text2:#7a8aaa;--blue:#4f8ef7;--violet:#7c5ff7;--teal:#00d4aa;--amber:#f59e0b;--red:#ef4444;--radius:14px}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);background-image:radial-gradient(ellipse at 20% 50%,rgba(79,142,247,.06) 0%,transparent 60%),radial-gradient(ellipse at 80% 20%,rgba(124,95,247,.06) 0%,transparent 60%);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100vh;padding:20px}
+.container{max-width:600px;margin:0 auto}
+.logo{text-align:center;padding:30px 0 20px;font-size:26px;font-weight:700;background:linear-gradient(135deg,var(--blue),var(--violet),var(--teal));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.hero{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:28px;text-align:center;margin-bottom:20px;position:relative;overflow:hidden}
+.hero::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--blue),var(--violet),var(--teal))}
+.precio{font-size:48px;font-weight:700;color:var(--teal);margin:10px 0 4px}
+.precio-sub{font-size:14px;color:var(--text2)}
+.features{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:20px 0}
+.feat{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text2)}
+.feat-icon{color:var(--teal);font-size:16px;flex-shrink:0}
+.metodos{margin-bottom:20px}
+.metodo{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:12px;overflow:hidden;cursor:pointer;transition:border-color .2s}
+.metodo:hover{border-color:var(--teal)}
+.metodo.active{border-color:var(--teal)}
+.metodo-header{padding:16px 20px;display:flex;align-items:center;justify-content:space-between}
+.metodo-name{font-size:15px;font-weight:600;display:flex;align-items:center;gap:10px}
+.metodo-body{display:none;padding:0 20px 20px}
+.metodo.active .metodo-body{display:block}
+.dato-row{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--bg3);border-radius:10px;margin-bottom:8px}
+.dato-label{font-size:12px;color:var(--text2)}
+.dato-val{font-size:15px;font-weight:600;font-family:monospace;letter-spacing:.5px}
+.copy-btn{padding:5px 12px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text2);font-size:12px;cursor:pointer;transition:all .15s}
+.copy-btn:hover{color:var(--teal);border-color:var(--teal)}
+.steps{margin-top:12px}
+.step{display:flex;align-items:flex-start;gap:10px;margin-bottom:8px;font-size:13px;color:var(--text2)}
+.step-n{width:22px;height:22px;border-radius:50%;background:rgba(0,212,170,.15);color:var(--teal);font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
+.notice{background:rgba(124,95,247,.08);border:1px solid rgba(124,95,247,.2);border-radius:12px;padding:16px 20px;font-size:13px;color:var(--text2);line-height:1.7;margin-bottom:20px}
+.notice strong{color:var(--violet)}
+.badge{display:inline-flex;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600}
+.b-teal{background:rgba(0,212,170,.12);color:var(--teal);border:1px solid rgba(0,212,170,.2)}
+.b-gray{background:var(--bg3);color:var(--text2)}
+.btn-back{display:block;text-align:center;margin-top:20px;padding:12px;border-radius:10px;border:1px solid var(--border);background:var(--bg2);color:var(--text2);font-size:14px;cursor:pointer;text-decoration:none}
+.btn-back:hover{border-color:var(--teal);color:var(--teal)}
+</style></head><body>
+<div class="container">
+  <div class="logo">📈 InvestiaBet</div>
+
+  <div class="hero">
+    <div style="font-size:14px;color:var(--text2);margin-bottom:8px">Plan Premium — Acceso completo</div>
+    <div class="precio">$30 USD</div>
+    <div class="precio-sub">por mes · o $15 USD precio fundadores</div>
+    <div class="features" style="margin-top:20px;text-align:left">
+      <div class="feat"><span class="feat-icon">⭐</span>Gold Tips diarios</div>
+      <div class="feat"><span class="feat-icon">🔒</span>Sure Bets ≥85%</div>
+      <div class="feat"><span class="feat-icon">📊</span>ROI y stats reales</div>
+      <div class="feat"><span class="feat-icon">📨</span>Alertas Telegram</div>
+      <div class="feat"><span class="feat-icon">🔴</span>Picks en vivo</div>
+      <div class="feat"><span class="feat-icon">♾️</span>Acceso ilimitado</div>
+    </div>
+  </div>
+
+  <div class="notice">
+    <strong>Precio especial fundadores:</strong> $15 USD/mes para los primeros 20 usuarios.<br>
+    Una vez que confirmes el pago te activamos el acceso en menos de <strong>1 hora</strong>.
+  </div>
+
+  <div style="font-size:13px;color:var(--text2);margin-bottom:12px;font-weight:500">Elegí cómo pagar:</div>
+
+  <div class="metodos">
+
+    <div class="metodo active" onclick="toggle(this)">
+      <div class="metodo-header">
+        <div class="metodo-name">💙 Mercado Pago <span class="badge b-teal">Recomendado</span></div>
+        <span style="color:var(--text2);font-size:18px" id="arr-mp">▲</span>
+      </div>
+      <div class="metodo-body">
+        <div class="dato-row">
+          <span class="dato-label">Alias</span>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="dato-val">franvons</span>
+            <button class="copy-btn" onclick="copiar('franvons',this)">Copiar</button>
+          </div>
+        </div>
+        <div class="steps">
+          <div class="step"><div class="step-n">1</div><span>Abrí Mercado Pago → Enviar dinero</span></div>
+          <div class="step"><div class="step-n">2</div><span>Buscá el alias <strong style="color:var(--text)">franvons</strong></span></div>
+          <div class="step"><div class="step-n">3</div><span>Enviá el equivalente a $15 USD con asunto <strong style="color:var(--text)">"InvestiaBet Premium"</strong></span></div>
+          <div class="step"><div class="step-n">4</div><span>Mandá el comprobante a <strong style="color:var(--teal)">@Stakegoldia_bot</strong> en Telegram</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="metodo" onclick="toggle(this)">
+      <div class="metodo-header">
+        <div class="metodo-name">💜 AstroPay</div>
+        <span style="color:var(--text2);font-size:18px" id="arr-ap">▼</span>
+      </div>
+      <div class="metodo-body">
+        <div class="dato-row">
+          <span class="dato-label">Número de cuenta</span>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="dato-val" style="font-size:12px">0000177500098073799130</span>
+            <button class="copy-btn" onclick="copiar('0000177500098073799130',this)">Copiar</button>
+          </div>
+        </div>
+        <div class="steps">
+          <div class="step"><div class="step-n">1</div><span>Abrí tu app de AstroPay</span></div>
+          <div class="step"><div class="step-n">2</div><span>Enviá <strong style="color:var(--text)">$15 USD</strong> al número de cuenta indicado</span></div>
+          <div class="step"><div class="step-n">3</div><span>Mandá el comprobante a <strong style="color:var(--teal)">@Stakegoldia_bot</strong></span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="metodo" style="opacity:.5;cursor:default">
+      <div class="metodo-header">
+        <div class="metodo-name">🔶 Crypto (USDT) <span class="badge b-gray">Próximamente</span></div>
+      </div>
+    </div>
+
+  </div>
+
+  <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:16px 20px;font-size:13px;color:var(--text2);line-height:1.8">
+    ✅ Una vez que confirmemos tu pago por Telegram, activamos tu plan en menos de 1 hora.<br>
+    ✅ Acceso completo por 30 días desde la activación.<br>
+    ✅ Podés renovar antes de que venza para no perder los picks.
+  </div>
+
+  <a href="/" class="btn-back">← Volver al dashboard</a>
+</div>
+<script>
+function toggle(el){
+  document.querySelectorAll('.metodo').forEach(m=>{
+    if(m!==el){m.classList.remove('active');}
+  });
+  el.classList.toggle('active');
+}
+function copiar(txt,btn){
+  navigator.clipboard.writeText(txt).then(()=>{
+    const orig=btn.textContent;
+    btn.textContent='¡Copiado!';btn.style.color='var(--teal)';
+    setTimeout(()=>{btn.textContent=orig;btn.style.color='';},2000);
+  });
+}
+</script></body></html>"""
 
 LOGIN_HTML = """<!DOCTYPE html>
 <html lang="es"><head>
@@ -512,7 +713,10 @@ async function cargarDatos(){
       <td><span class="badge ${x.plan==='premium'?'b-violet':x.plan==='admin'?'b-blue':'b-gray'}">${x.plan}</span></td>
       <td>$${x.bankroll||1000} ${x.moneda||'USD'}</td>
       <td>${x.tg_activo?'<span class="badge b-teal">✓</span>':'—'}</td>
-      <td style="font-size:11px;color:var(--text2)">${x.fecha_registro?String(x.fecha_registro).substring(0,10):''}</td>
+      <td style="font-size:11px;color:var(--text2)">
+        ${x.fecha_registro?String(x.fecha_registro).substring(0,10):''}
+        ${x.fecha_vencimiento?'<br><span style="color:var(--amber)">Vence: '+String(x.fecha_vencimiento).substring(0,10)+'</span>':''}
+      </td>
       <td style="display:flex;gap:6px;flex-wrap:wrap">
         <select onchange="cambiarPlan(${x.id},this.value)" style="font-size:11px;padding:4px 6px">
           <option ${x.plan==='free'?'selected':''} value="free">Free</option>
@@ -521,6 +725,8 @@ async function cargarDatos(){
         </select>
         <button class="btn" style="font-size:11px;padding:4px 10px;color:${x.activo?'var(--red)':'var(--teal)'}"
           onclick="toggleActivo(${x.id},${!x.activo})">${x.activo?'Desactivar':'Activar'}</button>
+        <button class="btn" style="font-size:11px;padding:4px 10px;color:var(--violet)"
+          onclick="activarPremium(${x.id})">⭐ +30d</button>
       </td></tr>`).join('');
     document.getElementById('tabla-invitaciones').innerHTML=i.map(x=>`<tr>
       <td><code style="color:var(--teal);font-size:14px;letter-spacing:1px">${x.codigo}</code></td>
@@ -543,6 +749,14 @@ async function generarInvitacion(){
     </div>`;
     cargarDatos();
   }
+}
+async function activarPremium(id){
+  const dias = prompt('¿Cuántos días de Premium?','30');
+  if(!dias) return;
+  const r=await fetch('/api/admin/usuario/'+id+'/premium',{method:'POST',credentials:'include',headers:authH(),body:JSON.stringify({dias:parseInt(dias)})});
+  const d=await r.json();
+  if(d.ok) alert('✓ Premium activado hasta '+d.vencimiento?.substring(0,10));
+  cargarDatos();
 }
 async function cambiarPlan(id,plan){await fetch('/api/admin/usuario/'+id+'/plan',{method:'POST',credentials:'include',headers:authH(),body:JSON.stringify({plan})});cargarDatos();}
 async function toggleActivo(id,activo){await fetch('/api/admin/usuario/'+id+'/activo',{method:'POST',credentials:'include',headers:authH(),body:JSON.stringify({activo})});cargarDatos();}
@@ -1146,7 +1360,7 @@ body{background:var(--bg);background-image:radial-gradient(ellipse at 10% 30%,rg
       <div style="font-weight:600;margin-bottom:3px;color:var(--violet)">Plan Gratuito</div>
       <div style="font-size:12px;color:var(--text2)">Ves 3 Gold Tips y 2 Sure Bets. Activá Premium para acceso completo.</div>
     </div>
-    <button class="btn-grad">⭐ Activar Premium</button>
+    <button class="btn-grad" onclick="window.location.href='/premium'">⭐ Activar Premium</button>
   </div>
 
   <div class="metrics">
@@ -1517,7 +1731,15 @@ async function loadUser(){
   USER=await r.json();
   const pl={'free':'Gratuito','premium':'Premium','admin':'Admin'};
   const pc={'free':'b-gray','premium':'b-violet','admin':'b-blue'};
-  document.getElementById('plan-badge').textContent=pl[USER.plan]||USER.plan;
+  let planLabel = pl[USER.plan]||USER.plan;
+  if(USER.plan==='premium' && USER.fecha_vencimiento){
+    const venc = new Date(USER.fecha_vencimiento);
+    const hoy  = new Date();
+    const dias = Math.ceil((venc-hoy)/(1000*60*60*24));
+    if(dias<=3) planLabel += ' ⚠ '+dias+'d';
+    else planLabel += ' · '+venc.toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit'});
+  }
+  document.getElementById('plan-badge').textContent=planLabel;
   document.getElementById('plan-badge').className='badge '+(pc[USER.plan]||'b-gray');
   document.getElementById('freemium-banner').style.display=USER.plan==='free'?'flex':'none';
   if(USER.plan==='free') document.getElementById('btn-scan').style.display='none';
