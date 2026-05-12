@@ -22,7 +22,12 @@ async def run_scan_bg():
         from core.notifier import notificar_usuarios_premium
         from core.database import get_all_users
         loop = asyncio.get_event_loop()
-        resultado = await loop.run_in_executor(None, escanear_mercado)
+        # Obtener bankroll del admin para el scan del sistema
+        from core.database import get_all_users
+        usuarios_scan = await get_all_users()
+        admin_user = next((u for u in usuarios_scan if u["plan"] == "admin"), None)
+        bankroll_scan = float(admin_user["bankroll"]) if admin_user else float(os.getenv("BANKROLL_USD", 1000000))
+        resultado = await loop.run_in_executor(None, lambda: escanear_mercado(bankroll_scan))
         cache["resultado"] = resultado
         cache["ultimo_scan"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         log.info(f"Scan OK — {len(resultado.get('gold_tips',[]))} Gold · {len(resultado.get('sure_bets',[]))} Sure · {len(resultado.get('picks_vivo',[]))} Vivo")
@@ -68,21 +73,18 @@ def picks_para_usuario(user: dict) -> dict:
     vivo     = r.get("picks_vivo", [])
 
     if plan in ("premium", "admin"):
-        # Recalcular stake usando el % de Kelly del engine sobre el bankroll real
-        # El engine guarda gold_score y edge — recalculamos con MAX_STAKE_PCT fijo
-        MAX_STAKE = 0.05  # 5% máximo del bankroll
+        # Recalcular stake sobre el bankroll real del usuario con Kelly
+        MAX_STAKE = 0.05
 
         def recalc(picks):
             result = []
             for p in picks:
                 if p.get("odds_ref"):
-                    # Usar edge para estimar Kelly fraction
-                    edge     = p.get("edge", 0)
                     prob     = p.get("prob_ajustada", 0.5)
                     odds     = p["odds_ref"]
                     b        = odds - 1
                     kelly    = max(0.0, (b * prob - (1 - prob)) / b) if b > 0 else 0
-                    pct      = min(kelly * 0.5, MAX_STAKE)  # 1/2 Kelly, cap 5%
+                    pct      = min(kelly * 0.5, MAX_STAKE)
                     stake    = round(bankroll * pct, 2)
                     ganancia = round(stake * b, 2)
                     roi      = round(ganancia / bankroll * 100, 2) if bankroll else 0
@@ -240,6 +242,11 @@ async def get_stats(request: Request):
     try:
         from core.database import get_estadisticas
         data = await get_estadisticas(user["id"])
+        # Agregar ratio de conversión para que el frontend muestre en moneda correcta
+        engine_bankroll = float(os.getenv("BANKROLL_USD", 1000))
+        user_bankroll   = float(user.get("bankroll", 1000))
+        data["moneda"]  = user.get("moneda", "USD")
+        data["ratio"]   = 1  # Engine ya usa el bankroll del usuario
         return JSONResponse(data)
     except Exception as e:
         log.error(f"Error estadisticas: {e}")
@@ -744,7 +751,12 @@ function getToken(){return localStorage.getItem('sb_token')||'';}
 function authH(){const t=getToken();return t?{'Authorization':'Bearer '+t,'Content-Type':'application/json'}:{'Content-Type':'application/json'};}
 async function aFetch(url,opts={}){opts.credentials='include';opts.headers={...authH(),...(opts.headers||{})};return fetch(url,opts);}
 function fmt(n,d=2){return n!=null?Number(n).toFixed(d):'—';}
+let _ratio = 1;
 function fmtMiles(n){
+  if(n==null||n===undefined) return '—';
+  return Math.round(n * _ratio).toLocaleString('es-AR');
+}
+function fmtMilesRaw(n){
   if(n==null||n===undefined) return '—';
   return Math.round(n).toLocaleString('es-AR');
 }
@@ -894,7 +906,7 @@ function renderTipoRow(label,s,color){
       <span>${s.total} picks</span>
       <span>Win: <strong>${fmt(s.win_rate,1)}%</strong></span>
       <span>ROI: <strong style="color:${rc}">${fmtPct(s.roi)}</strong></span>
-      <span>P&L: <strong style="color:${s.pnl>=0?'var(--teal)':'var(--red)'}">${s.pnl>=0?'+':''}$${fmt(Math.abs(s.pnl))}</strong></span>
+      <span>P&L: <strong style="color:${s.pnl>=0?'var(--teal)':'var(--red)'}">${s.pnl>=0?'+':''}${fmtMiles(Math.abs(s.pnl))}</strong></span>
     </div>
   </div>`;
 }
@@ -913,9 +925,9 @@ function renderHistorial(picks){
       <td>${tipoBadge(p.tipo,p.es_gold)}</td>
       <td style="color:var(--text2)">@${fmt(p.odds_ref,2)}</td>
       <td style="color:var(--blue);font-weight:600">@${p.odds_real?fmt(p.odds_real,2):'—'}</td>
-      <td style="color:var(--violet)">$${fmt(p.stake_usd,2)}</td>
+      <td style="color:var(--violet)">${fmtMiles(p.stake_usd)}</td>
       <td>${estadoBadge(p.estado)}${p.es_cashout?'<div style="font-size:10px;color:var(--amber);margin-top:2px">@'+fmt(p.odds_cashout,2)+'</div>':''}</td>
-      <td style="font-weight:700;color:${(p.pnl||0)>=0?'var(--teal)':'var(--red)'}">${p.pnl!=null?(p.pnl>=0?'+':'')+fmt(p.pnl):'—'}</td>
+      <td style="font-weight:700;color:${(p.pnl||0)>=0?'var(--teal)':'var(--red)'}">${p.pnl!=null?(p.pnl>=0?'+':'')+fmtMiles(Math.abs(p.pnl)):'—'}</td>
     </tr>`).join('')}
     </tbody></table></div></div>`;
 }
@@ -933,8 +945,9 @@ function showTab(p,el){
 function renderAll(){
   if(!DATA) return;
   const mon = DATA.moneda||'USD';
-  document.getElementById('bankroll-val').textContent='$'+Number(DATA.bankroll).toFixed(2);
-  document.getElementById('moneda-val').textContent=mon;
+  _ratio = DATA.ratio || 1;
+  document.getElementById('bankroll-val').textContent=fmtMilesRaw(DATA.bankroll);
+  document.getElementById('moneda-val').textContent=mon+' (ratio: '+(_ratio).toFixed(0)+'x)';
   // Pendientes
   const pends = DATA.pendientes||[];
   const psec  = document.getElementById('pendientes-section');
