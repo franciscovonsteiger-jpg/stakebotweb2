@@ -1260,7 +1260,9 @@ function renderVivo(){
 
 function filterByDep(key){
   if(!DATA) return[];
-  const all=DATA.picks_validos||DATA.gold_tips||[];
+  // Los tabs muestran los Gold Tips por deporte — sin repetir la sección superior
+  // Solo mostramos los no-gold o todos filtrados por deporte
+  const all=DATA.gold_tips||DATA.picks_validos||[];
   if(key==='todos') return all;
   if(key==='otros') return all.filter(p=>['MMA','Béisbol'].includes(p.deporte));
   const m={futbol:'Fútbol',tenis:'Tenis',basquet:'Básquet',esports:'Esports'};
@@ -1272,6 +1274,7 @@ function showTab(name,el){
   if(el) el.classList.add('active');
   currentTab=name;
   const det=document.getElementById('tab-detail');
+
   if(name==='descartados'){
     const desc=DATA?.picks_descartados||[];
     det.innerHTML=desc.length?desc.map(p=>`<div class="pick-card" style="opacity:.4;border-style:dashed">
@@ -1282,8 +1285,23 @@ function showTab(name,el){
     </div>`).join(''):'<div class="empty">✓ Sin picks descartados.</div>';
     return;
   }
+
+  if(name==='todos'){
+    // En "Todos" no repetimos — mostramos mensaje guía
+    det.innerHTML=`<div class="empty" style="padding:20px">
+      <span class="empty-icon">👆</span>
+      Usá los filtros de arriba para ver picks por deporte.<br>
+      <span style="font-size:12px">Los Gold Tips están en la columna derecha.</span>
+    </div>`;
+    return;
+  }
+
   const picks=filterByDep(name);
-  det.innerHTML=picks.length?picks.map(renderValueCard).join(''):`<div class="empty"><span class="empty-icon">🔍</span>Sin picks en este filtro.</div>`;
+  if(!picks.length){
+    det.innerHTML=`<div class="empty"><span class="empty-icon">🔍</span>Sin picks de ${name} en las próximas 48hs.</div>`;
+    return;
+  }
+  det.innerHTML=picks.map(renderValueCard).join('');
 }
 
 function updateMetrics(){
