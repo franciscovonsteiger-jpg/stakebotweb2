@@ -1157,8 +1157,16 @@ function renderPendiente(p){
       </div>
     </div>
     <div class="resultado-form">
-      <label>Cuota real colocada en la casa</label>
-      <input type="number" id="odds-real-${id}" step="0.01" min="1" placeholder="ej: 2.45" value="${p.odds_ref||''}">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+        <div>
+          <label>Cuota real colocada</label>
+          <input type="number" id="odds-real-${id}" step="0.01" min="1" placeholder="ej: 2.45" value="${p.odds_ref||''}">
+        </div>
+        <div>
+          <label>Monto real apostado (ARS)</label>
+          <input type="number" id="stake-real-${id}" step="1" min="0" placeholder="ej: 50000" value="${Math.round(p.stake_usd||0)}">
+        </div>
+      </div>
       <div class="cashout-field" id="cashout-field-${id}">
         <label>Cuota de Cash Out</label>
         <input type="number" id="odds-cashout-${id}" step="0.01" min="1" placeholder="ej: 1.80">
@@ -1185,11 +1193,12 @@ function toggleCashout(id){
 async function marcarResultado(id, estado){
   const oddsReal    = parseFloat(document.getElementById('odds-real-'+id)?.value)||0;
   const oddsCashout = parseFloat(document.getElementById('odds-cashout-'+id)?.value)||0;
+  const stakeReal   = parseFloat(document.getElementById('stake-real-'+id)?.value)||0;
   if(estado==='cashout' && oddsCashout<=0){
     alert('Ingresá la cuota de cash out');return;
   }
   const r = await aFetch('/api/picks/'+id+'/resultado',{
-    method:'POST', body:JSON.stringify({estado, odds_real:oddsReal, odds_cashout:oddsCashout})
+    method:'POST', body:JSON.stringify({estado, odds_real:oddsReal, odds_cashout:oddsCashout, stake_real:stakeReal})
   });
   const d = await r.json();
   if(d.ok){
