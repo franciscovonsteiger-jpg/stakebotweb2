@@ -293,6 +293,31 @@ async def migrar_stakes(request: Request):
     except Exception as e:
         return JSONResponse({"ok":False,"error":str(e)}, status_code=500)
 
+@app.post("/api/me/password")
+async def cambiar_password(request: Request):
+    user = await require_auth(request)
+    if not user: return JSONResponse({"ok":False}, status_code=401)
+    data = await request.json()
+    from core.database import get_pool, hash_password
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Verificar contraseña actual
+        hash_actual = hash_password(data.get("password_actual",""))
+        ok = await conn.fetchval(
+            "SELECT id FROM usuarios WHERE id=$1 AND password_hash=$2",
+            user["id"], hash_actual
+        )
+        if not ok:
+            return JSONResponse({"ok":False,"error":"Contraseña actual incorrecta"})
+        nueva = data.get("password_nueva","")
+        if len(nueva) < 6:
+            return JSONResponse({"ok":False,"error":"La nueva contraseña debe tener al menos 6 caracteres"})
+        await conn.execute(
+            "UPDATE usuarios SET password_hash=$1 WHERE id=$2",
+            hash_password(nueva), user["id"]
+        )
+    return JSONResponse({"ok":True})
+
 @app.post("/api/admin/reset-password")
 async def reset_password(request: Request):
     user = await require_auth(request)
@@ -1522,7 +1547,12 @@ body{background:var(--bg);background-image:radial-gradient(ellipse at 10% 30%,rg
       <input type="checkbox" id="p-tgactivo" style="width:auto;accent-color:var(--teal)">
       <label for="p-tgactivo" style="font-size:13px">Recibir Gold Tips + Sure Bets por Telegram</label>
     </div>
-    <div style="display:flex;gap:8px;margin-top:18px">
+    <div style="border-top:1px solid var(--border);margin:16px 0 14px;padding-top:14px">
+      <div style="font-size:12px;color:var(--text2);margin-bottom:10px;font-weight:500">CAMBIAR CONTRASEÑA</div>
+      <div class="field"><label>Contraseña actual</label><input type="password" id="p-pass-actual" placeholder="••••••••"></div>
+      <div class="field"><label>Nueva contraseña</label><input type="password" id="p-pass-nueva" placeholder="mínimo 6 caracteres"></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:4px">
       <button class="btn" style="flex:1" onclick="hidePerfil()">Cancelar</button>
       <button class="btn-grad" style="flex:1" onclick="guardarPerfil()">Guardar</button>
     </div>
@@ -1883,6 +1913,18 @@ function showPerfil(){document.getElementById('modal-perfil').style.display='fle
 function hidePerfil(){document.getElementById('modal-perfil').style.display='none';}
 
 async function guardarPerfil(){
+  const msg=document.getElementById('perfil-msg');
+  // Cambio de contraseña si llenó los campos
+  const passActual=document.getElementById('p-pass-actual').value;
+  const passNueva=document.getElementById('p-pass-nueva').value;
+  if(passActual || passNueva){
+    if(!passActual||!passNueva){msg.style.color='var(--red)';msg.textContent='Completá ambos campos de contraseña';return;}
+    const rp=await aFetch('/api/me/password',{method:'POST',body:JSON.stringify({password_actual:passActual,password_nueva:passNueva})});
+    const dp=await rp.json();
+    if(!dp.ok){msg.style.color='var(--red)';msg.textContent=dp.error||'Error al cambiar contraseña';return;}
+    document.getElementById('p-pass-actual').value='';
+    document.getElementById('p-pass-nueva').value='';
+  }
   const data={
     bankroll:parseFloat(document.getElementById('p-bankroll').value)||1000,
     moneda:document.getElementById('p-moneda').value,
@@ -1891,8 +1933,8 @@ async function guardarPerfil(){
     tg_activo:document.getElementById('p-tgactivo').checked,
   };
   const r=await aFetch('/api/me/perfil',{method:'POST',body:JSON.stringify(data)});
-  const d=await r.json();const msg=document.getElementById('perfil-msg');
-  if(d.ok){msg.textContent='✓ Perfil guardado';USER={...USER,...data};setTimeout(hidePerfil,1500);fetchData();}
+  const d=await r.json();
+  if(d.ok){msg.style.color='var(--teal)';msg.textContent='✓ Perfil guardado';USER={...USER,...data};setTimeout(hidePerfil,1500);fetchData();}
   else{msg.style.color='var(--red)';msg.textContent=d.error||'Error';}
 }
 
