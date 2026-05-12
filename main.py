@@ -202,8 +202,22 @@ async def resultado_pick(pick_id: int, request: Request):
 async def get_stats(request: Request):
     user = await require_auth(request)
     if not user: return JSONResponse({"ok":False}, status_code=401)
-    from core.database import get_estadisticas
-    return JSONResponse(await get_estadisticas(user["id"]))
+    try:
+        from core.database import get_estadisticas
+        data = await get_estadisticas(user["id"])
+        return JSONResponse(data)
+    except Exception as e:
+        log.error(f"Error estadisticas: {e}")
+        return JSONResponse({
+            "bankroll": user.get("bankroll", 1000),
+            "moneda": user.get("moneda", "USD"),
+            "todo": {"total_colocados":0,"total_resueltos":0,"ganados":0,"perdidos":0,"cashouts":0,"pendientes":0,"win_rate":0,"pnl_total":0,"invertido_total":0,"roi":0,"value_stats":{},"sure_stats":{},"gold_stats":{},"por_deporte":{}},
+            "mes": {"total_colocados":0,"total_resueltos":0,"ganados":0,"perdidos":0,"cashouts":0,"pendientes":0,"win_rate":0,"pnl_total":0,"invertido_total":0,"roi":0,"value_stats":{},"sure_stats":{},"gold_stats":{},"por_deporte":{}},
+            "pendientes": [],
+            "historial": [],
+            "bankroll_hist": [],
+            "error": str(e)
+        })
 
 # ── API Admin ─────────────────────────────────────────────────────────────────
 
