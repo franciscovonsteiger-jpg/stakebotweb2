@@ -1594,7 +1594,7 @@ function fmt(n,d=2){return n!=null?Number(n).toFixed(d):'—';}
 function fmtUSD(n){
   if(n==null) return '—';
   const mon = USER?.moneda||'USD';
-  if(mon==='ARS') return 'ARS '+Number(n).toLocaleString('es-AR',{minimumFractionDigits:0,maximumFractionDigits:0});
+  if(mon==='ARS') return 'ARS '+Math.round(n);  // Sin separador para evitar confusión con Stake
   if(mon==='USDT') return 'USDT '+fmt(n,2);
   return '$'+fmt(n,2);
 }
