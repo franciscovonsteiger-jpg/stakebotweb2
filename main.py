@@ -1134,6 +1134,7 @@ body{background:var(--bg);background-image:radial-gradient(ellipse at 10% 30%,rg
     <button class="btn" onclick="window.location.href='/estadisticas'">📊 Mis Stats</button>
     <button class="btn" onclick="showPerfil()">⚙ Perfil</button>
     <button class="btn" id="btn-scan" onclick="triggerScan()">↻ Escanear</button>
+    <button class="btn" id="btn-admin" onclick="window.location.href='/admin'" style="display:none;color:var(--violet);border-color:var(--violet-border)">⚙ Admin</button>
     <button class="btn" onclick="doLogout()">Salir</button>
   </div>
 </div>
@@ -1520,6 +1521,7 @@ async function loadUser(){
   document.getElementById('plan-badge').className='badge '+(pc[USER.plan]||'b-gray');
   document.getElementById('freemium-banner').style.display=USER.plan==='free'?'flex':'none';
   if(USER.plan==='free') document.getElementById('btn-scan').style.display='none';
+  if(USER.plan==='admin') document.getElementById('btn-admin').style.display='inline-flex';
   document.getElementById('p-bankroll').value=USER.bankroll||1000;
   document.getElementById('p-moneda').value=USER.moneda||'USD';
   document.getElementById('p-riesgo').value=USER.perfil_riesgo||'inteligente';
