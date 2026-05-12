@@ -491,14 +491,49 @@ async def get_estadisticas(user_id: int) -> dict:
                 "por_deporte":      {d: tipo_stats(v) for d,v in dep_stats.items()},
             }
 
+        bankroll_actual = float(user["bankroll"]) if user else 1000
+
+        # ROI compuesto — bankroll inicial = bankroll_antes del primer pick resuelto
+        todos_resueltos = [p for p in todos if dict(p).get("estado") in ("ganado","perdido","void","cashout")]
+        bankroll_inicial = bankroll_actual
+        fecha_inicio = None
+        if todos_resueltos:
+            primer = sorted(todos_resueltos, key=lambda p: p["fecha_colocado"] or "")
+            if primer:
+                be = float(primer[0].get("bankroll_engine") or primer[0].get("bankroll_antes") or 0)
+                if be > 0:
+                    bankroll_inicial = be
+                fecha_inicio = primer[0]["fecha_colocado"]
+
+        # Calcular días activo
+        dias_activo = 1
+        if fecha_inicio:
+            try:
+                from datetime import datetime, timezone
+                fi = fecha_inicio if hasattr(fecha_inicio,'date') else datetime.fromisoformat(str(fecha_inicio))
+                dias_activo = max(1, (datetime.now(timezone.utc) - fi.replace(tzinfo=timezone.utc) if fi.tzinfo is None else datetime.now(timezone.utc) - fi).days + 1)
+            except:
+                dias_activo = 1
+
+        roi_acumulado = round((bankroll_actual / bankroll_inicial - 1) * 100, 2) if bankroll_inicial > 0 else 0
+        # ROI diario compuesto: (bankroll_actual/bankroll_inicial)^(1/dias) - 1
+        try:
+            roi_diario = round(((bankroll_actual / bankroll_inicial) ** (1/dias_activo) - 1) * 100, 2) if bankroll_inicial > 0 else 0
+        except:
+            roi_diario = 0
+
         return {
-            "bankroll":       float(user["bankroll"]) if user else 1000,
-            "moneda":         user["moneda"] if user else "USD",
-            "todo":           calcular(todos, float(user["bankroll"]) if user else 1000),
-            "mes":            calcular(mes, float(user["bankroll"]) if user else 1000),
-            "pendientes":     [serialize_row(dict(r)) for r in todos if dict(r).get("estado")=="pendiente"],
-            "historial":      [serialize_row(dict(r)) for r in todos[:100]],
-            "bankroll_hist":  [serialize_row(dict(r)) for r in bankroll_hist],
+            "bankroll":         bankroll_actual,
+            "bankroll_inicial": bankroll_inicial,
+            "moneda":           user["moneda"] if user else "USD",
+            "dias_activo":      dias_activo,
+            "roi_acumulado":    roi_acumulado,
+            "roi_diario":       roi_diario,
+            "todo":             calcular(todos, bankroll_actual),
+            "mes":              calcular(mes, bankroll_actual),
+            "pendientes":       [serialize_row(dict(r)) for r in todos if dict(r).get("estado")=="pendiente"],
+            "historial":        [serialize_row(dict(r)) for r in todos[:100]],
+            "bankroll_hist":    [serialize_row(dict(r)) for r in bankroll_hist],
         }
 
 async def guardar_pick_manual(user_id: int, data: dict) -> dict:
