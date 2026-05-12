@@ -138,7 +138,7 @@ async def init_db():
     log.info("Base de datos inicializada")
 
 def hash_password(password: str) -> str:
-    salt = os.getenv("SECRET_KEY", "stakebot_salt_2025")
+    salt = os.getenv("SECRET_KEY", "stakebot2025secretkey")
     return hashlib.sha256(f"{salt}{password}".encode()).hexdigest()
 
 async def crear_usuario(email, username, password, codigo="") -> dict:
