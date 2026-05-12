@@ -604,6 +604,29 @@ async def guardar_pick_manual(user_id: int, data: dict) -> dict:
             return {"ok": False, "error": str(e)}
 
 
+async def eliminar_pick(pick_db_id: int, user_id: int) -> dict:
+    """Elimina un pick pendiente y restaura el bankroll."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM historial_picks WHERE id=$1 AND usuario_id=$2 AND estado='pendiente'",
+            pick_db_id, user_id
+        )
+        if not row:
+            return {"ok": False, "error": "Pick no encontrado o ya tiene resultado"}
+        stake = float(row["stake_usd"] or 0)
+        # Restaurar el bankroll — devolver el stake
+        user = await conn.fetchrow("SELECT bankroll FROM usuarios WHERE id=$1", user_id)
+        bankroll_actual = float(user["bankroll"]) if user else 0
+        nuevo_bankroll = round(bankroll_actual + stake, 2)
+        await conn.execute("UPDATE usuarios SET bankroll=$1 WHERE id=$2", nuevo_bankroll, user_id)
+        await conn.execute("DELETE FROM historial_picks WHERE id=$1", pick_db_id)
+        await conn.execute(
+            "INSERT INTO bankroll_historial (usuario_id, monto, tipo, descripcion) VALUES ($1,$2,$3,$4)",
+            user_id, stake, "pick_eliminado", f"Pick eliminado: {row['evento']} — stake devuelto"
+        )
+        return {"ok": True, "bankroll_nuevo": nuevo_bankroll}
+
 # ── Vencimientos ──────────────────────────────────────────────────────────────
 
 async def activar_trial(user_id: int) -> dict:
