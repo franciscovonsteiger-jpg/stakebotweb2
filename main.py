@@ -293,6 +293,21 @@ async def migrar_stakes(request: Request):
     except Exception as e:
         return JSONResponse({"ok":False,"error":str(e)}, status_code=500)
 
+@app.post("/api/admin/reset-password")
+async def reset_password(request: Request):
+    user = await require_auth(request)
+    if not user or user["plan"]!="admin": return JSONResponse({"ok":False},status_code=403)
+    data = await request.json()
+    from core.database import get_pool, hash_password
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        nuevo_hash = hash_password(data["password"])
+        await conn.execute(
+            "UPDATE usuarios SET password_hash=$1 WHERE email=$2",
+            nuevo_hash, data["email"]
+        )
+    return JSONResponse({"ok":True,"mensaje":"Contraseña actualizada"})
+
 @app.post("/api/trial")
 async def activar_trial_ep(request: Request):
     user = await require_auth(request)
