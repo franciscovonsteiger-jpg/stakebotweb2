@@ -1729,28 +1729,41 @@ function renderVivoCard(p){
   </div>`;
 }
 
-async function marcarYaColocados(){
-  try{
-    const r=await aFetch('/api/estadisticas');
-    if(!r.ok) return;
-    const stats=await r.json();
-    const pendientes=(stats.pendientes||[]).concat(stats.historial||[]);
-    const idsColocados=new Set(pendientes.map(p=>p.pick_id));
-    document.querySelectorAll('.btn').forEach(btn=>{
-      if(btn.textContent.includes('Colocar') || btn.textContent.includes('Colocado')){
-        const idx=btn.getAttribute('onclick')?.match(/\d+/)?.[0];
-        if(idx!=null){
-          const pick=window._picks[idx];
-          if(pick && idsColocados.has(pick.id)){
-            btn.textContent='✓ Colocado en Stake';
-            btn.style.color='var(--teal)';
-            btn.style.borderColor='var(--teal)';
-            btn.disabled=true;
-          }
+function getColocados(){
+  try{return new Set(JSON.parse(localStorage.getItem('picks_colocados')||'[]'));}
+  catch(e){return new Set();}
+}
+function saveColocado(pickId){
+  const set=getColocados();
+  set.add(pickId);
+  localStorage.setItem('picks_colocados',JSON.stringify([...set]));
+}
+
+function marcarYaColocados(){
+  const colocados=getColocados();
+  if(!colocados.size) return;
+  document.querySelectorAll('[data-pick-id]').forEach(btn=>{
+    if(colocados.has(btn.getAttribute('data-pick-id'))){
+      btn.textContent='✓ Colocado en Stake';
+      btn.style.color='var(--teal)';
+      btn.style.borderColor='var(--teal)';
+      btn.disabled=true;
+    }
+  });
+  // También buscar por índice en window._picks
+  Object.entries(window._picks).forEach(([idx,pick])=>{
+    if(colocados.has(pick.id)){
+      document.querySelectorAll('.btn').forEach(btn=>{
+        const onclick=btn.getAttribute('onclick')||'';
+        if(onclick.includes('colocarPick') && onclick.includes('(this,'+idx+')')){
+          btn.textContent='✓ Colocado en Stake';
+          btn.style.color='var(--teal)';
+          btn.style.borderColor='var(--teal)';
+          btn.disabled=true;
         }
-      }
-    });
-  }catch(e){}
+      });
+    }
+  });
 }
 
 async function colocarPick(btn,pickId){
@@ -1772,12 +1785,15 @@ async function colocarPick(btn,pickId){
     const r=await aFetch('/api/picks/colocar',{method:'POST',body:JSON.stringify(pickConBankroll)});
     const d=await r.json();
     if(d.ok){
-      btn.textContent='✓ Guardado en Stats';
+      btn.textContent='✓ Colocado en Stake';
       btn.style.color='var(--teal)';
       btn.style.borderColor='var(--teal)';
+      btn.disabled=true;
       btn.title='Abrí Mis Stats para confirmar el resultado';
+      // Guardar en localStorage para persistir al recargar
+      if(pick && pick.id) saveColocado(pick.id);
       if(d.bankroll_nuevo!=null){
-        document.getElementById('m-bank').textContent='$'+Number(d.bankroll_nuevo).toFixed(2);
+        document.getElementById('m-bank').textContent='ARS '+Math.round(d.bankroll_nuevo);
       }
     } else {
       console.error('Error guardando pick:', d.error);
