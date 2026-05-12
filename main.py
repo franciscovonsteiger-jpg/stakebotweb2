@@ -1212,9 +1212,14 @@ function renderStats(stats, moneda='USD'){
       <div class="metric-sub">${stats.ganados||0} ✓ · ${stats.perdidos||0} ✗ · ${stats.cashouts||0} 💸</div>
     </div>
     <div class="metric m-${stats.roi>=0?'green':'red'}">
-      <div class="metric-label">ROI real</div>
-      <div class="metric-val" style="color:${roiColor}">${fmtPct(stats.roi)}</div>
-      <div class="metric-sub">sobre bankroll inicial</div>
+      <div class="metric-label">ROI acumulado</div>
+      <div class="metric-val" style="color:${roiColor}">${fmtPct(DATA.roi_acumulado)}</div>
+      <div class="metric-sub">desde el inicio · ${DATA.dias_activo||1} día${(DATA.dias_activo||1)>1?'s':''}</div>
+    </div>
+    <div class="metric m-${(DATA.roi_diario||0)>=0?'green':'red'}">
+      <div class="metric-label">ROI diario compuesto</div>
+      <div class="metric-val" style="color:${(DATA.roi_diario||0)>=0?'var(--teal)':'var(--red)';font-size:20px}">${fmtPct(DATA.roi_diario)}</div>
+      <div class="metric-sub">promedio por día</div>
     </div>
     <div class="metric m-${stats.pnl_total>=0?'teal':'red'}">
       <div class="metric-label">P&L total</div>
