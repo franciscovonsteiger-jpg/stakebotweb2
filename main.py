@@ -1911,75 +1911,95 @@ function saveColocado(pickId){
   }catch(e){}
 }
 
-async function marcarYaColocados(){
+// Cache de picks colocados (evento+pick exacto y opuestos por evento+línea)
+// Se refresca con fetchColocados() y se consume con aplicarMarcasColocadas().
+window._colocadosCache = { exactos: new Set(), eventos: new Set(), opuestos: new Set(), ts: 0 };
+
+// Detecta la línea numérica para identificar opuestos del mismo mercado.
+// "Over 174.5" y "Under 174.5" → misma key 'OU|174.5' → son opuestos.
+// "Lakers (+5.5)" y "Celtics (-5.5)" → misma key 'SPR|5.5'.
+function lineaKey(equipoPick){
+  const ep = (equipoPick||'').trim();
+  let m = ep.match(/^(Over|Under)\s+([\d.]+)$/i);
+  if(m) return 'OU|'+m[2];
+  m = ep.match(/\(([+-]?[\d.]+)\)$/);
+  if(m){
+    const v = Math.abs(parseFloat(m[1]));
+    if(!isNaN(v)) return 'SPR|'+v;
+  }
+  return null;
+}
+
+async function fetchColocados(){
   try{
     const r=await aFetch('/api/estadisticas');
     if(!r||r.status!==200) return;
     const stats=await r.json();
     const ahora = Date.now();
+    // Pendientes siempre cuentan. Historial: últimas 48h para no marcar picks viejísimos.
     const todos = (stats.pendientes||[]).concat(
       (stats.historial||[]).filter(p=>{
         if(!p.fecha_colocado) return false;
         return (ahora - new Date(p.fecha_colocado).getTime()) < 48*60*60*1000;
       })
     );
-    if(!todos.length) return;
 
-    // Detecta la línea numérica para identificar opuestos del mismo mercado.
-    // "Over 174.5" y "Under 174.5" → misma key 'OU|174.5' → son opuestos.
-    // "Lakers (+5.5)" y "Celtics (-5.5)" → misma key 'SPR|5.5'.
-    function lineaKey(equipoPick){
-      const ep = (equipoPick||'').trim();
-      let m = ep.match(/^(Over|Under)\s+([\d.]+)$/i);
-      if(m) return 'OU|'+m[2];
-      m = ep.match(/\(([+-]?[\d.]+)\)$/);
-      if(m){
-        const v = Math.abs(parseFloat(m[1]));
-        if(!isNaN(v)) return 'SPR|'+v;
-      }
-      return null;
-    }
-
-    // Claves simples por evento+pick (mismo pick exacto)
-    const colocadosKeys = new Set(todos.map(p=>
-      (p.evento||'').toLowerCase().trim() + '|' +
-      (p.equipo_pick||'').toLowerCase().trim()
-    ));
-    const colocadosEventos = new Set(todos.map(p=>(p.evento||'').toLowerCase().trim()));
-
-    // Claves de opuestos: evento+linea_numerica (Over/Under, Spread)
-    // Si está colocado "Over 174.5", el botón de "Under 174.5" debe bloquearse.
-    const colocadosOpuestos = new Set();
+    const exactos = new Set();
+    const eventos = new Set();
+    const opuestos = new Set();
     todos.forEach(p=>{
+      const ev = (p.evento||'').toLowerCase().trim();
+      const ep = (p.equipo_pick||'').toLowerCase().trim();
+      exactos.add(ev+'|'+ep);
+      eventos.add(ev);
       const lk = lineaKey(p.equipo_pick);
-      if(lk){
-        colocadosOpuestos.add((p.evento||'').toLowerCase().trim()+'|'+lk);
-      }
+      if(lk) opuestos.add(ev+'|'+lk);
     });
 
-    document.querySelectorAll('.btn-colocar').forEach(btn=>{
-      const evento = (btn.getAttribute('data-evento')||'').toLowerCase().trim();
-      const pick   = (btn.getAttribute('data-pick')||'').toLowerCase().trim();
-      const lk     = lineaKey(pick);
-      const esOpuesto = lk && colocadosOpuestos.has(evento+'|'+lk)
-                          && !colocadosKeys.has(evento+'|'+pick);
+    window._colocadosCache = { exactos, eventos, opuestos, ts: ahora };
+  }catch(e){console.log('fetchColocados:',e);}
+}
 
-      if(colocadosKeys.has(evento+'|'+pick) || colocadosEventos.has(evento)){
-        btn.textContent='✓ Ya colocado';
-        btn.style.color='var(--teal)';
-        btn.style.borderColor='var(--teal)';
-        btn.style.background='rgba(0,212,170,0.08)';
-        btn.disabled=true;
-      } else if(esOpuesto){
-        btn.textContent='⚠ Opuesto ya colocado';
-        btn.style.color='var(--amber)';
-        btn.style.borderColor='var(--amber)';
-        btn.style.background='rgba(245,158,11,0.08)';
-        btn.disabled=true;
-        btn.title='Ya tenés el lado contrario de esta línea colocado. No tiene sentido apostar a ambos.';
-      }
-    });
-  }catch(e){console.log('marcarYaColocados:',e);}
+function aplicarMarcasColocadas(){
+  const cache = window._colocadosCache;
+  if(!cache || !cache.exactos) return;
+
+  document.querySelectorAll('.btn-colocar').forEach(btn=>{
+    // No revisar botones ya marcados (evita parpadeo y re-trabajo)
+    if(btn.dataset.marcado==='1') return;
+
+    const evento = (btn.getAttribute('data-evento')||'').toLowerCase().trim();
+    const pick   = (btn.getAttribute('data-pick')||'').toLowerCase().trim();
+    if(!evento || !pick) return;
+
+    const lk = lineaKey(pick);
+    const yaColocado = cache.exactos.has(evento+'|'+pick) || cache.eventos.has(evento);
+    const esOpuesto  = lk && cache.opuestos.has(evento+'|'+lk)
+                          && !cache.exactos.has(evento+'|'+pick);
+
+    if(yaColocado){
+      btn.textContent='✓ Ya colocado';
+      btn.style.color='var(--teal)';
+      btn.style.borderColor='var(--teal)';
+      btn.style.background='rgba(0,212,170,0.08)';
+      btn.disabled=true;
+      btn.dataset.marcado='1';
+    } else if(esOpuesto){
+      btn.textContent='⚠ Opuesto ya colocado';
+      btn.style.color='var(--amber)';
+      btn.style.borderColor='var(--amber)';
+      btn.style.background='rgba(245,158,11,0.08)';
+      btn.disabled=true;
+      btn.title='Ya tenés el lado contrario de esta línea colocado. No tiene sentido apostar a ambos.';
+      btn.dataset.marcado='1';
+    }
+  });
+}
+
+// Función legacy mantenida por compatibilidad: hace fetch + aplica.
+async function marcarYaColocados(){
+  await fetchColocados();
+  aplicarMarcasColocadas();
 }
 
 async function colocarPick(btn,pickId){
@@ -2005,12 +2025,16 @@ async function colocarPick(btn,pickId){
       btn.style.color='var(--teal)';
       btn.style.borderColor='var(--teal)';
       btn.disabled=true;
+      btn.dataset.marcado='1';
       btn.title='Abrí Mis Stats para confirmar el resultado';
       // Guardar en localStorage para persistir al recargar
       if(pick && pick.id) saveColocado(pick.id);
       if(d.bankroll_nuevo!=null){
         document.getElementById('m-bank').textContent='ARS '+Math.round(d.bankroll_nuevo);
       }
+      // Refrescar cache para que el opuesto (Over/Under contrario) también
+      // quede bloqueado al instante en la misma pantalla.
+      fetchColocados().then(aplicarMarcasColocadas);
     } else {
       console.error('Error guardando pick:', d.error);
       btn.textContent='✓ Colocado (sin guardar)';
@@ -2032,6 +2056,8 @@ async function colocarSure(btn,sureId){
   try{
     await aFetch('/api/picks/colocar',{method:'POST',body:JSON.stringify({...sure,tipo:'sure'})});
     btn.textContent='✓ Colocado en Stats';btn.style.color='var(--teal)';
+    btn.dataset.marcado='1';
+    fetchColocados().then(aplicarMarcasColocadas);
   }catch(e){btn.textContent='✓ Colocado';btn.style.color='var(--teal)';btn.disabled=true;}
 }
 
@@ -2042,6 +2068,7 @@ function renderSure(){
   const el=document.getElementById('sure-lista');
   if(!sures.length){el.innerHTML='<div class="empty"><span class="empty-icon">🔍</span>Sin picks de alta confianza.<br><span style="font-size:12px">El motor escanea cada 30 min.</span></div>';return;}
   el.innerHTML=sures.map(renderSureCard).join('');
+  aplicarMarcasColocadas();
 }
 
 function renderValue(){
@@ -2051,6 +2078,7 @@ function renderValue(){
   const el=document.getElementById('value-lista');
   if(!picks.length){el.innerHTML='<div class="empty"><span class="empty-icon">📊</span>Sin Gold Tips con edge ≥ '+(minE*100).toFixed(0)+'%</div>';return;}
   el.innerHTML=picks.map(renderValueCard).join('');
+  aplicarMarcasColocadas();
 }
 
 function renderVivo(){
@@ -2075,6 +2103,7 @@ function renderVivo(){
     window._picks[idx]=p;
   });
   document.getElementById('vivo-lista').innerHTML=vivosFiltrados.map(renderVivoCard).join('');
+  aplicarMarcasColocadas();
 }
 
 function filterByDep(key){
@@ -2121,6 +2150,7 @@ function showTab(name,el){
     return;
   }
   det.innerHTML=picks.map(renderValueCard).join('');
+  aplicarMarcasColocadas();
 }
 
 function updateMetrics(){
@@ -2233,6 +2263,10 @@ async function fetchData(){
     document.getElementById('scan-badge').className='badge b-teal';
     document.getElementById('scan-badge').textContent='● Live';
     document.getElementById('last-scan').textContent=d.ultimo_scan?'Último: '+d.ultimo_scan:'';
+    // Refrescar el cache de picks colocados ANTES de renderizar, así los botones
+    // ya salen marcados al primer pintado y no aparecen como "disponibles" por
+    // un race condition.
+    await fetchColocados();
     updateMetrics();renderSure();renderValue();renderVivo();showTab(currentTab,null);
   }catch(e){setTimeout(fetchData,8000);}
 }
