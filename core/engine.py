@@ -1,4 +1,4 @@
-import os, time, logging
+import os, time, logging, re
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass, asdict
 from typing import Optional
@@ -512,6 +512,49 @@ def escanear_mercado(bankroll_usuario: float = None) -> dict:
             log.warning(f"{sport_key} HTTP {code}")
         except Exception as e:
             log.warning(f"{sport_key}: {e}")
+
+    # ── Value Picks — dedup Over/Under y Spreads opuestos por evento+línea ─────
+    # Cuando hay Over y Under (o Spreads contrarios) del mismo total/punto en el
+    # mismo evento, solo puede tener edge real UNO. Nos quedamos con el de
+    # mayor edge y descartamos el opuesto como ruido del modelo.
+    def _linea_key(p):
+        """Extrae la línea numérica de un pick para detectar opuestos del mismo mercado.
+        Ej: 'Over 174.5' y 'Under 174.5' → misma key 'OU|174.5'
+            'Lakers (+5.5)' y 'Celtics (-5.5)' → misma key 'SPR|5.5'
+        Retorna None si el pick no tiene línea (h2h normal, btts, etc)."""
+        ep = (p.equipo_pick or "").strip()
+        # Over/Under: "Over 174.5", "Under 174.5"
+        m = re.match(r"^(Over|Under)\s+([\d.]+)$", ep, re.IGNORECASE)
+        if m:
+            return f"OU|{m.group(2)}"
+        # Spread: "Lakers (+5.5)", "Celtics (-5.5)" → misma línea absoluta
+        m = re.search(r"\(([+-]?[\d.]+)\)$", ep)
+        if m:
+            try:
+                val = abs(float(m.group(1)))
+                return f"SPR|{val}"
+            except ValueError:
+                return None
+        return None
+
+    def _dedup_opuestos(picks):
+        """Para cada (evento, línea) deja solo el pick con mayor edge."""
+        picks_sorted = sorted(picks, key=lambda p: p.edge, reverse=True)
+        seen, out = set(), []
+        for p in picks_sorted:
+            lk = _linea_key(p)
+            if lk is None:
+                out.append(p); continue
+            key = f"{p.evento}|{p.mercado}|{lk}"
+            if key in seen:
+                log.info(f"Dedup opuesto: descartado {p.evento} · {p.equipo_pick} @ {p.odds_ref} (edge {p.edge*100:.1f}% < ganador)")
+                continue
+            seen.add(key)
+            out.append(p)
+        return out
+
+    all_value = _dedup_opuestos(all_value)
+    all_vivo  = _dedup_opuestos(all_vivo)
 
     # ── Sure Picks — deduplicar por evento+mercado ─────────────────────────────
     all_sure.sort(key=lambda s: s.prob_modelo, reverse=True)
