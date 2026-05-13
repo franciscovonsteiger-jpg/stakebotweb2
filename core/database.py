@@ -608,6 +608,74 @@ async def guardar_pick_manual(user_id: int, data: dict) -> dict:
             return {"ok": False, "error": str(e)}
 
 
+async def editar_resultado(pick_db_id: int, user_id: int, data: dict, es_admin: bool = False) -> dict:
+    """Edita un resultado ya confirmado — recalcula P&L y ajusta bankroll."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM historial_picks WHERE id=$1 AND usuario_id=$2",
+            pick_db_id, user_id
+        )
+        if not row:
+            return {"ok": False, "error": "Pick no encontrado"}
+
+        # Solo editables en 24hs salvo admin
+        if not es_admin and row["estado"] != "pendiente":
+            from datetime import datetime, timezone, timedelta
+            fecha_res = row["fecha_resultado"]
+            if fecha_res:
+                ahora = datetime.now(timezone.utc)
+                diff = ahora - fecha_res.replace(tzinfo=timezone.utc) if fecha_res.tzinfo is None else ahora - fecha_res
+                if diff > timedelta(hours=24):
+                    return {"ok": False, "error": "Solo podés editar resultados dentro de las 24hs. Contactá al admin."}
+
+        # P&L anterior para revertir
+        pnl_anterior = float(row["pnl"] or 0)
+
+        # Calcular nuevo P&L
+        estado      = data.get("estado", row["estado"])
+        odds_real   = float(data.get("odds_real") or row["odds_real"] or row["odds_ref"] or 0)
+        odds_co     = float(data.get("odds_cashout") or row["odds_cashout"] or 0)
+        stake_real  = float(data.get("stake_real") or row["stake_usd"] or 0)
+        es_cashout  = estado == "cashout"
+
+        if estado == "ganado":
+            pnl_nuevo = round(stake_real * (odds_real - 1), 2)
+        elif estado == "perdido":
+            pnl_nuevo = -round(stake_real, 2)
+        elif estado == "cashout" and odds_co > 0:
+            pnl_nuevo = round(stake_real * (odds_co - 1), 2)
+        elif estado == "void":
+            pnl_nuevo = 0.0
+        else:
+            pnl_nuevo = 0.0
+
+        # Diferencia a aplicar al bankroll
+        diferencia = round(pnl_nuevo - pnl_anterior, 2)
+
+        # Actualizar pick
+        await conn.execute("""
+            UPDATE historial_picks
+            SET estado=$1, odds_real=$2, odds_cashout=$3, es_cashout=$4,
+                pnl=$5, stake_usd=$6, fecha_resultado=NOW()
+            WHERE id=$7
+        """, estado, odds_real,
+             odds_co if es_cashout else None,
+             es_cashout, pnl_nuevo, stake_real, pick_db_id)
+
+        # Ajustar bankroll
+        user = await conn.fetchrow("SELECT bankroll FROM usuarios WHERE id=$1", user_id)
+        bankroll_actual = float(user["bankroll"]) if user else 0
+        nuevo_bankroll  = round(bankroll_actual + diferencia, 2)
+        await conn.execute("UPDATE usuarios SET bankroll=$1 WHERE id=$2", nuevo_bankroll, user_id)
+        await conn.execute(
+            "INSERT INTO bankroll_historial (usuario_id,monto,tipo,descripcion) VALUES ($1,$2,$3,$4)",
+            user_id, diferencia, "edicion_resultado",
+            f"Corrección: {row['evento']} — {row['estado']} → {estado}"
+        )
+
+        return {"ok": True, "pnl_nuevo": pnl_nuevo, "diferencia": diferencia, "bankroll_nuevo": nuevo_bankroll}
+
 async def eliminar_pick(pick_db_id: int, user_id: int) -> dict:
     """Elimina un pick pendiente y restaura el bankroll."""
     pool = await get_pool()
