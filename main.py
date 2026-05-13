@@ -1,5 +1,5 @@
 import os, asyncio, logging
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI, BackgroundTasks, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,7 +29,9 @@ async def run_scan_bg():
         bankroll_scan = float(admin_user["bankroll"]) if admin_user else float(os.getenv("BANKROLL_USD", 1000000))
         resultado = await loop.run_in_executor(None, lambda: escanear_mercado(bankroll_scan))
         cache["resultado"] = resultado
-        cache["ultimo_scan"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        # Hora del scan en hora Argentina (UTC-3), no del servidor Railway que está en UTC.
+        _ahora_arg = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=-3)))
+        cache["ultimo_scan"] = _ahora_arg.strftime("%d/%m/%Y %H:%M:%S")
         log.info(f"Scan OK — {len(resultado.get('gold_tips',[]))} Gold · {len(resultado.get('sure_bets',[]))} Sure · {len(resultado.get('picks_vivo',[]))} Vivo")
         usuarios = await get_all_users()
         cache["gold_enviados"] = notificar_usuarios_premium(resultado, usuarios, cache["gold_enviados"])
