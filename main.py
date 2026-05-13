@@ -1965,9 +1965,6 @@ function aplicarMarcasColocadas(){
   if(!cache || !cache.exactos) return;
 
   document.querySelectorAll('.btn-colocar').forEach(btn=>{
-    // No revisar botones ya marcados (evita parpadeo y re-trabajo)
-    if(btn.dataset.marcado==='1') return;
-
     const evento = (btn.getAttribute('data-evento')||'').toLowerCase().trim();
     const pick   = (btn.getAttribute('data-pick')||'').toLowerCase().trim();
     if(!evento || !pick) return;
@@ -1978,20 +1975,52 @@ function aplicarMarcasColocadas(){
                           && !cache.exactos.has(evento+'|'+pick);
 
     if(yaColocado){
-      btn.textContent='✓ Ya colocado';
-      btn.style.color='var(--teal)';
-      btn.style.borderColor='var(--teal)';
-      btn.style.background='rgba(0,212,170,0.08)';
-      btn.disabled=true;
-      btn.dataset.marcado='1';
+      // Marcar como colocado (solo si no estaba ya marcado así, evita parpadeo)
+      if(btn.dataset.marcado!=='colocado'){
+        btn.textContent='✓ Ya colocado';
+        btn.style.color='var(--teal)';
+        btn.style.borderColor='var(--teal)';
+        btn.style.background='rgba(0,212,170,0.08)';
+        btn.disabled=true;
+        btn.title='';
+        btn.dataset.marcado='colocado';
+      }
     } else if(esOpuesto){
-      btn.textContent='⚠ Opuesto ya colocado';
-      btn.style.color='var(--amber)';
-      btn.style.borderColor='var(--amber)';
-      btn.style.background='rgba(245,158,11,0.08)';
-      btn.disabled=true;
-      btn.title='Ya tenés el lado contrario de esta línea colocado. No tiene sentido apostar a ambos.';
-      btn.dataset.marcado='1';
+      if(btn.dataset.marcado!=='opuesto'){
+        btn.textContent='⚠ Opuesto ya colocado';
+        btn.style.color='var(--amber)';
+        btn.style.borderColor='var(--amber)';
+        btn.style.background='rgba(245,158,11,0.08)';
+        btn.disabled=true;
+        btn.title='Ya tenés el lado contrario de esta línea colocado. No tiene sentido apostar a ambos.';
+        btn.dataset.marcado='opuesto';
+      }
+    } else {
+      // El pick ya NO está colocado (se eliminó en Stats) → restaurar botón a su
+      // estado original. Detectamos esto cuando había una marca previa.
+      if(btn.dataset.marcado){
+        btn.disabled=false;
+        btn.style.background='';
+        btn.title='';
+        delete btn.dataset.marcado;
+        // Restaurar texto y color según el tipo de botón (lo deducimos por el onclick)
+        const onclick = btn.getAttribute('onclick')||'';
+        if(onclick.indexOf('colocarSure')>=0){
+          btn.textContent='✓ Colocar en Stake';
+          btn.style.color='var(--teal)';
+          btn.style.borderColor='var(--teal-border)';
+        } else if(btn.style.borderColor && btn.style.borderColor.indexOf('239')>=0){
+          // Vivo (rojo)
+          btn.textContent='⚡ Colocar ahora';
+          btn.style.color='var(--red)';
+          btn.style.borderColor='rgba(239,68,68,.4)';
+        } else {
+          // Gold tip estándar
+          btn.textContent='Colocar en Stake →';
+          btn.style.color='';
+          btn.style.borderColor='';
+        }
+      }
     }
   });
 }
@@ -2025,7 +2054,7 @@ async function colocarPick(btn,pickId){
       btn.style.color='var(--teal)';
       btn.style.borderColor='var(--teal)';
       btn.disabled=true;
-      btn.dataset.marcado='1';
+      btn.dataset.marcado='colocado';
       btn.title='Abrí Mis Stats para confirmar el resultado';
       // Guardar en localStorage para persistir al recargar
       if(pick && pick.id) saveColocado(pick.id);
@@ -2056,7 +2085,7 @@ async function colocarSure(btn,sureId){
   try{
     await aFetch('/api/picks/colocar',{method:'POST',body:JSON.stringify({...sure,tipo:'sure'})});
     btn.textContent='✓ Colocado en Stats';btn.style.color='var(--teal)';
-    btn.dataset.marcado='1';
+    btn.dataset.marcado='colocado';
     fetchColocados().then(aplicarMarcasColocadas);
   }catch(e){btn.textContent='✓ Colocado';btn.style.color='var(--teal)';btn.disabled=true;}
 }
@@ -2280,4 +2309,17 @@ async function triggerScan(){
 async function doLogout(){await aFetch('/api/auth/logout',{method:'POST'});localStorage.removeItem('sb_token');window.location.href='/login';}
 loadUser().then(fetchData);
 setInterval(fetchData,300000);
+
+// Cuando la pestaña vuelve a tener foco (ej: el usuario eliminó un pick desde
+// Stats y volvió al dashboard), refrescar el cache para reflejar cambios.
+// Sin esto, los botones quedan "Ya colocado" hasta el próximo fetchData (5 min).
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='visible'){
+    fetchColocados().then(aplicarMarcasColocadas);
+  }
+});
+// También al volver el foco a la ventana (caso navegación pestaña)
+window.addEventListener('focus',()=>{
+  fetchColocados().then(aplicarMarcasColocadas);
+});
 </script></body></html>"""
