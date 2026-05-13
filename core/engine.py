@@ -6,13 +6,23 @@ import requests
 
 log = logging.getLogger("stakebot")
 
+# Importar contexto si está disponible
+try:
+    from core.context import enriquecer_evento, ajustar_prob_con_contexto
+    CONTEXTO_DISPONIBLE = True
+except:
+    CONTEXTO_DISPONIBLE = False
+    def enriquecer_evento(home, away, deporte, liga): return {}
+    def ajustar_prob_con_contexto(p, ctx): return p, []
+
 # ── Configuración ──────────────────────────────────────────────────────────────
 API_KEY        = os.getenv("ODDS_API_KEY", "")
-ODDSPAPI_KEY   = os.getenv("ODDSPAPI_KEY", "")       # Nueva API con Pinnacle real
+ODDSPAPI_KEY    = os.getenv("ODDSPAPI_KEY", "")      # Nueva API con Pinnacle real
+PANDASCORE_KEY  = os.getenv("PANDASCORE_KEY", "")   # Esports stats y contexto
 BANKROLL       = float(os.getenv("BANKROLL_USD", 1000))
 KELLY_FRAC     = float(os.getenv("KELLY_FRACTION", 0.25))   # 1/4 Kelly — más conservador
 MAX_STAKE_PCT  = float(os.getenv("MAX_STAKE_PCT", 0.03))    # Cap 3% bankroll
-MIN_EDGE       = float(os.getenv("MIN_EDGE_PCT", 0.07))     # Edge mínimo 7%
+MIN_EDGE       = float(os.getenv("MIN_EDGE_PCT", 0.10))     # Edge mínimo 10% — solo picks con convicción real
 MIN_EDGE_VIVO  = 0.10                                        # En vivo más estricto
 MAX_GOLD_TIPS  = int(os.getenv("MAX_GOLD_TIPS", 8))
 VENTANA_HORAS  = int(os.getenv("VENTANA_HORAS", 48))
@@ -26,7 +36,7 @@ ODDSPAPI_URL   = "https://api.oddspapi.com"
 # Con OddsPapi habilitamos totals y spreads en béisbol también
 MARKETS_BY_SPORT = {
     "soccer":     ["h2h", "btts", "totals"],
-    "tennis":     ["h2h"],
+    "tennis":     ["h2h", "sets", "alternate_sets"],  # h2h solo cuando hay valor real + sets y games
     "basketball": ["h2h", "totals"],
     "mma":        ["h2h"],
     "baseball":   ["h2h"],          # Solo h2h hasta tener Pinnacle confirmado
@@ -57,6 +67,7 @@ SPORTS_ACTIVE = {
     "soccer_usa_mls":                    {"nombre": "MLS",                  "deporte": "Fútbol",  "tipo": "soccer"},
     "soccer_fifa_world_cup":             {"nombre": "FIFA World Cup 2026",  "deporte": "Fútbol",  "tipo": "soccer"},
     # ── Tenis ───────────────────────────────────────────────────────────────────
+    # ── Tenis — mercados alternativos (no h2h puro) ────────────────────────────
     "tennis_atp_italian_open":           {"nombre": "ATP Roma",             "deporte": "Tenis",   "tipo": "tennis"},
     "tennis_wta_italian_open":           {"nombre": "WTA Roma",             "deporte": "Tenis",   "tipo": "tennis"},
     "tennis_atp_french_open":            {"nombre": "ATP Roland Garros",    "deporte": "Tenis",   "tipo": "tennis"},
@@ -71,14 +82,17 @@ SPORTS_ACTIVE = {
     "icehockey_nhl":                     {"nombre": "NHL",                  "deporte": "Hockey",  "tipo": "hockey"},
     # ── MMA ─────────────────────────────────────────────────────────────────────
     "mma_mixed_martial_arts":            {"nombre": "MMA/UFC",              "deporte": "MMA",     "tipo": "mma"},
+    # ── Esports ─────────────────────────────────────────────────────────────────
+    "esports_lol":                       {"nombre": "LoL LCK/LEC/LCS",      "deporte": "Esports", "tipo": "esports"},
+    "esports_csgo":                      {"nombre": "CS2 Pro League",       "deporte": "Esports", "tipo": "esports"},
 }
 
 CONTEXT_RULES = [
     {"id":"champion_early","descripcion":"Campeón anticipado","penalizacion":0.22,"descartar":True,
      "equipos":["Bayern Munich","FC Bayern","Bayern München"]},
     {"id":"relegated","descripcion":"Equipo ya descendido","penalizacion":0.20,"descartar":True,"equipos":[]},
-    {"id":"esport","descripcion":"Esport — Kelly reducido","penalizacion":0.0,"descartar":False,
-     "kelly_override":0.15,"max_stake_override":0.01,"deportes":["Esports"]},
+    {"id":"esport","descripcion":"Esport — Kelly conservador","penalizacion":0.0,"descartar":False,
+     "kelly_override":0.20,"max_stake_override":0.02,"deportes":["Esports"]},
 ]
 
 MARKET_LABELS = {
@@ -193,8 +207,8 @@ def calc_modelo_prob(p_pinn, p_cons, penali, n_casas) -> float:
         # Con Pinnacle real: peso mayor a Pinnacle
         p_base = 0.70 * p_pinn + 0.30 * p_cons
     else:
-        # Sin Pinnacle: solo consensus con descuento de confianza
-        p_base = p_cons * 0.97  # descuento por incertidumbre
+        # Sin Pinnacle: descuento más agresivo — no confiar solo en consensus
+        p_base = p_cons * 0.94  # descuento 6% por falta de sharp data
     bonus = min(n_casas / 10, 1.0) * 0.015
     return max(0.01, min(0.99, p_base + bonus - penali))
 
@@ -301,6 +315,14 @@ def _analizar(ev, meta, market_key, es_vivo=False, oddspapi_eventos=None):
     min_edge_ok = MIN_EDGE_VIVO if es_vivo else MIN_EDGE
     tiene_pinnacle = any(b.get("key") == "pinnacle" for b in bookmakers)
 
+    # Enriquecer con contexto real (API-Sports)
+    ctx_deportivo = enriquecer_evento(home, away, meta["deporte"], meta["nombre"])
+
+    # Filtro crítico: si hay diferencia extrema de ranking en tenis, descartar
+    if ctx_deportivo.get("diferencia_extrema") and meta["deporte"] == "Tenis":
+        log.info(f"Tenis descartado por ranking: {home} vs {away}")
+        return [], []
+
     outcomes_set = set()
     outcomes_map = {}  # original → display
     for bm in bookmakers:
@@ -320,11 +342,21 @@ def _analizar(ev, meta, market_key, es_vivo=False, oddspapi_eventos=None):
 
         n_casas = odds_count(bookmakers, outcome_name, market_key)
         mejor, _ = best_odds(bookmakers, outcome_name, market_key)
-        if mejor <= 1.10: continue
+        if mejor <= 1.20: continue  # Evitar favoritos extremos sin valor real
+        # En tenis h2h: si la cuota es muy baja Y no hay Pinnacle, descartar
+        # (partidos muy desequilibrados donde el consenso puede estar equivocado)
+        if market_key == "h2h" and meta.get("tipo") == "tennis" and mejor < 1.45 and not tiene_pinnacle:
+            continue
 
         ctx    = detect_context(outcome_name, meta["deporte"])
         penali = ctx.get("penalizacion", 0.0)
         p_mod  = calc_modelo_prob(p_pinn, p_cons, penali, n_casas)
+
+        # Ajustar con contexto deportivo real
+        if ctx_deportivo:
+            p_mod, ctx_señales = ajustar_prob_con_contexto(p_mod, ctx_deportivo)
+        else:
+            ctx_señales = []
 
         # Sure Pick
         if not es_vivo and p_mod >= MIN_SURE_PROB and not ctx.get("descartar") and 1.10 <= mejor <= 5.0:
