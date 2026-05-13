@@ -1320,12 +1320,48 @@ function renderTipoRow(label,s,color){
   </div>`;
 }
 
+// Modal editar resultado
+let _editPickId = null;
+function showEditarResultado(id, estado, oddsReal, oddsCo, stake){
+  _editPickId = id;
+  document.getElementById('edit-estado').value = estado||'ganado';
+  document.getElementById('edit-odds').value = oddsReal||'';
+  document.getElementById('edit-stake').value = Math.round(stake||0);
+  document.getElementById('edit-odds-co').value = oddsCo||'';
+  document.getElementById('edit-co-field').style.display = estado==='cashout'?'block':'none';
+  document.getElementById('edit-msg').textContent = '';
+  document.getElementById('modal-editar').style.display = 'flex';
+}
+function hideEditar(){document.getElementById('modal-editar').style.display='none';}
+
+async function confirmarEdicion(){
+  const estado = document.getElementById('edit-estado').value;
+  const data = {
+    estado,
+    odds_real:    parseFloat(document.getElementById('edit-odds').value)||0,
+    stake_real:   parseFloat(document.getElementById('edit-stake').value)||0,
+    odds_cashout: parseFloat(document.getElementById('edit-odds-co').value)||0,
+  };
+  const r = await aFetch('/api/picks/'+_editPickId+'/editar',{method:'POST',body:JSON.stringify(data)});
+  const d = await r.json();
+  const msg = document.getElementById('edit-msg');
+  if(d.ok){
+    msg.style.color='var(--teal)';
+    msg.textContent='✓ Corregido · P&L: '+(d.pnl_nuevo>=0?'+':'')+Math.round(d.pnl_nuevo).toLocaleString('es-AR')+
+      ' · Bankroll: '+Math.round(d.bankroll_nuevo).toLocaleString('es-AR');
+    setTimeout(()=>{hideEditar();cargarDatos();},2000);
+  } else {
+    msg.style.color='var(--red)';
+    msg.textContent=d.error||'Error al editar';
+  }
+}
+
 function renderHistorial(picks){
   if(!picks||!picks.length) return '<div class="empty"><span class="empty-icon">📋</span>Sin historial de picks.<br><span style="font-size:12px">Colocá picks desde el dashboard.</span></div>';
   return `<div class="card" style="padding:0;overflow:hidden"><div style="overflow-x:auto">
     <table class="hist-table"><thead><tr>
       <th>Fecha</th><th>Evento</th><th>Pick</th><th>Tipo</th>
-      <th>Cuota ref</th><th>Cuota real</th><th>Stake</th><th>Estado</th><th>P&L</th>
+      <th>Cuota ref</th><th>Cuota real</th><th>Stake</th><th>Estado</th><th>P&L</th><th></th>
     </tr></thead><tbody>
     ${picks.filter(p=>p.estado!=='pendiente').map(p=>`<tr>
       <td style="color:var(--text2);font-size:11px;white-space:nowrap">${fmtDate(p.fecha_colocado)}</td>
@@ -1337,6 +1373,7 @@ function renderHistorial(picks){
       <td style="color:var(--violet)">${fmtMiles(p.stake_usd)}</td>
       <td>${estadoBadge(p.estado)}${p.es_cashout?'<div style="font-size:10px;color:var(--amber);margin-top:2px">@'+fmt(p.odds_cashout,2)+'</div>':''}</td>
       <td style="font-weight:700;color:${(p.pnl||0)>=0?'var(--teal)':'var(--red)'}">${p.pnl!=null?(p.pnl>=0?'+':'')+fmtMiles(Math.abs(p.pnl)):'—'}</td>
+      <td><button class="btn" style="font-size:11px;padding:3px 8px" onclick="showEditarResultado(${p.id},'${p.estado}',${p.odds_real||p.odds_ref||0},${p.odds_cashout||0},${p.stake_usd||0})">✏️</button></td>
     </tr>`).join('')}
     </tbody></table></div></div>`;
 }
