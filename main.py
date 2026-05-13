@@ -2035,9 +2035,23 @@ function renderVivo(){
   const vivos=DATA.picks_vivo||[];
   const sec=document.getElementById('vivo-section');
   if(!vivos.length){sec.style.display='none';return;}
+
+  // Filtrar: un solo pick por evento (el de mayor edge)
+  const eventosSeen=new Set();
+  const vivosFiltrados=vivos.filter(p=>{
+    if(eventosSeen.has(p.evento)) return false;
+    eventosSeen.add(p.evento);
+    return true;
+  });
+
+  if(!vivosFiltrados.length){sec.style.display='none';return;}
   sec.style.display='block';
-  document.getElementById('vivo-count').textContent=vivos.length+' picks';
-  document.getElementById('vivo-lista').innerHTML=vivos.map(renderVivoCard).join('');
+  document.getElementById('vivo-count').textContent=vivosFiltrados.length+' picks';
+  vivosFiltrados.forEach(p=>{window._picks=window._picks||{};
+    const idx=Object.keys(window._picks).length;
+    window._picks[idx]=p;
+  });
+  document.getElementById('vivo-lista').innerHTML=vivosFiltrados.map(renderVivoCard).join('');
 }
 
 function filterByDep(key){
