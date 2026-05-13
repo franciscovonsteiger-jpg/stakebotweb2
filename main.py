@@ -1860,7 +1860,7 @@ function renderValueCard(p){
         <div><div class="num-label">Ganancia pot.</div><div class="num-val" style="color:var(--violet)">+${fmtUSD(p.ganancia_pot)}</div></div>
         <div><div class="num-label">ROI</div><div class="num-val" style="color:var(--teal)">${fmtPct(p.roi_diario_pct)}</div></div>
       </div>
-      <button class="btn" style="font-size:12px" onclick="colocarPick(this,${_pidxStr})" class="btn btn-colocar" style="font-size:12px" data-evento="${p.evento.replace(/"/g,\'\')}" data-pick="${p.equipo_pick.replace(/"/g,\'\')}" data-mercado="${(p.mercado||'').replace(/"/g,\'\'")}">Colocar en Stake →</button>
+      <button class="btn" style="font-size:12px" onclick="colocarPick(this,${_pidxStr})" class="btn btn-colocar" style="font-size:12px" data-evento="${p.evento}" data-pick="${p.equipo_pick}">Colocar en Stake →</button>→</button>
     </div>`:`<div class="lock-row">🔒 Stake y ROI en Plan Premium</div>`}
   </div>`;
 }
