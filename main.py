@@ -1860,7 +1860,7 @@ function renderValueCard(p){
         <div><div class="num-label">Ganancia pot.</div><div class="num-val" style="color:var(--violet)">+${fmtUSD(p.ganancia_pot)}</div></div>
         <div><div class="num-label">ROI</div><div class="num-val" style="color:var(--teal)">${fmtPct(p.roi_diario_pct)}</div></div>
       </div>
-      <button class="btn" style="font-size:12px" onclick="colocarPick(this,${_pidxStr})" class="btn btn-colocar" style="font-size:12px">Colocar en Stake →</button>
+      <button class="btn" style="font-size:12px" onclick="colocarPick(this,${_pidxStr})" class="btn btn-colocar" style="font-size:12px" data-evento="${p.evento.replace(/"/g,\'\')}" data-pick="${p.equipo_pick.replace(/"/g,\'\')}" data-mercado="${(p.mercado||'').replace(/"/g,\'\'")}">Colocar en Stake →</button>
     </div>`:`<div class="lock-row">🔒 Stake y ROI en Plan Premium</div>`}
   </div>`;
 }
@@ -1916,44 +1916,52 @@ async function marcarYaColocados(){
     const r=await aFetch('/api/estadisticas');
     if(!r||r.status!==200) return;
     const stats=await r.json();
-    // Incluir pendientes E historial reciente (últimas 48hs)
     const ahora = Date.now();
     const todos = (stats.pendientes||[]).concat(
       (stats.historial||[]).filter(p=>{
         if(!p.fecha_colocado) return false;
-        const d = new Date(p.fecha_colocado).getTime();
-        return (ahora - d) < 48*60*60*1000; // últimas 48hs
+        return (ahora - new Date(p.fecha_colocado).getTime()) < 48*60*60*1000;
       })
     );
     if(!todos.length) return;
 
-    // Claves por evento+mercado+pick (más específico)
-    const colocadosKeys = new Set(todos.map(p=>
-      (p.evento||'').toLowerCase().trim() + '|' +
-      (p.mercado||'').toLowerCase().trim() + '|' +
-      (p.equipo_pick||'').toLowerCase().trim()
-    ));
+    // Normalizar nombre: quitar acentos, minúsculas, solo palabras largas
+    function normalizar(s){
+      return (s||'').toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+        .replace(/[^a-z0-9 ]/g,' ')
+        .split(' ').filter(w=>w.length>3).sort().join('|');
+    }
 
-    // Marcar cada pick que coincida
-    Object.entries(window._picks).forEach(([idx,pick])=>{
-      const key =
-        (pick.evento||'').toLowerCase().trim() + '|' +
-        (pick.mercado||'').toLowerCase().trim() + '|' +
-        (pick.equipo_pick||'').toLowerCase().trim();
+    // Índice de picks colocados por equipos involucrados
+    const colocadosEquipos = new Set();
+    const colocadosPickNorm = new Set();
+    todos.forEach(p=>{
+      // Por equipos del evento
+      const partes = (p.evento||'').split(/\s+vs\s+/i);
+      partes.forEach(eq => colocadosEquipos.add(normalizar(eq)));
+      // Por pick específico
+      colocadosPickNorm.add(normalizar(p.equipo_pick||''));
+    });
 
-      if(colocadosKeys.has(key)){
-        // Buscar el botón de este pick por su índice en el onclick
-        document.querySelectorAll('.btn-colocar').forEach(btn=>{
-          const onclick = btn.getAttribute('onclick')||'';
-          if(onclick.includes(','+idx+')')||onclick.includes(','+idx+' )')){
-            btn.textContent='✓ Ya colocado';
-            btn.style.color='var(--teal)';
-            btn.style.borderColor='var(--teal)';
-            btn.style.background='rgba(0,212,170,0.08)';
-            btn.style.opacity='1';
-            btn.disabled=true;
-          }
-        });
+    // Marcar botones
+    document.querySelectorAll('.btn-colocar').forEach(btn=>{
+      const eventoRaw = btn.getAttribute('data-evento')||'';
+      const pickRaw   = btn.getAttribute('data-pick')||'';
+      const pickNorm  = normalizar(pickRaw);
+      const eventoPartes = eventoRaw.split(/\s+vs\s+/i);
+
+      // Verificar si el pick específico ya está colocado
+      const pickColocado = colocadosPickNorm.has(pickNorm);
+      // Verificar si algún equipo del evento ya está en stats
+      const equipoColocado = eventoPartes.some(eq => colocadosEquipos.has(normalizar(eq)));
+
+      if(pickColocado || (equipoColocado && eventoPartes.length > 1)){
+        btn.textContent='✓ Ya colocado';
+        btn.style.color='var(--teal)';
+        btn.style.borderColor='var(--teal)';
+        btn.style.background='rgba(0,212,170,0.08)';
+        btn.disabled=true;
       }
     });
   }catch(e){console.log('marcarYaColocados:',e);}
