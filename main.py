@@ -395,6 +395,15 @@ async def pick_manual(request: Request):
         log.error(f"Error pick_manual: {e}")
         return JSONResponse({"ok":False,"error":str(e)}, status_code=500)
 
+@app.post("/api/picks/{pick_id}/editar")
+async def editar_resultado_ep(pick_id: int, request: Request):
+    user = await require_auth(request)
+    if not user: return JSONResponse({"ok":False}, status_code=401)
+    data = await request.json()
+    es_admin = user["plan"] == "admin"
+    from core.database import editar_resultado
+    return JSONResponse(await editar_resultado(pick_id, user["id"], data, es_admin))
+
 @app.delete("/api/picks/{pick_id}")
 async def eliminar_pick_ep(pick_id: int, request: Request):
     user = await require_auth(request)
@@ -1026,6 +1035,29 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
   <div id="panel-todo" style="display:none"></div>
   <div id="panel-historial" style="display:none"></div>
 
+</div>
+
+<!-- Modal editar resultado -->
+<div class="modal-bg" id="modal-editar" style="display:none" onclick="if(event.target===this)hideEditar()">
+  <div class="modal">
+    <div style="font-size:16px;font-weight:600;margin-bottom:18px;color:var(--amber)">✏️ Corregir resultado</div>
+    <div class="mfield"><label>Resultado correcto</label>
+      <select id="edit-estado" onchange="document.getElementById('edit-co-field').style.display=this.value==='cashout'?'block':'none'">
+        <option value="ganado">✓ Ganó</option>
+        <option value="perdido">✗ Perdió</option>
+        <option value="cashout">💸 Cash Out</option>
+        <option value="void">— Void</option>
+      </select>
+    </div>
+    <div class="mfield"><label>Cuota real colocada</label><input type="number" id="edit-odds" step="0.01" min="1" placeholder="ej: 2.45"></div>
+    <div class="mfield"><label>Monto real apostado (ARS)</label><input type="number" id="edit-stake" step="1" min="0" placeholder="ej: 50000"></div>
+    <div class="mfield" id="edit-co-field" style="display:none"><label>Cuota de Cash Out</label><input type="number" id="edit-odds-co" step="0.01" min="1" placeholder="ej: 1.80"></div>
+    <div style="display:flex;gap:8px;margin-top:16px">
+      <button class="btn" style="flex:1" onclick="hideEditar()">Cancelar</button>
+      <button class="btn-grad" style="flex:1" onclick="confirmarEdicion()">Confirmar corrección</button>
+    </div>
+    <div id="edit-msg" style="font-size:12px;margin-top:8px;text-align:center"></div>
+  </div>
 </div>
 
 <!-- Modal ajuste bankroll -->
@@ -1767,10 +1799,11 @@ function renderValueCard(p){
       <div class="pick-info">
         <div class="pick-meta">
           ${p.es_gold?'<span class="badge b-violet">⭐ Gold</span>':''}
+          ${p.categoria==='seguro'?'<span class="badge b-teal" style="font-size:9px">✓ Seguro</span>':p.categoria==='alto_valor'?'<span class="badge b-blue" style="font-size:9px">📈 Alto Valor</span>':''}
+          ${p.tiene_pinnacle?'<span style="font-size:9px;padding:2px 6px;border-radius:10px;background:rgba(124,95,247,.15);color:var(--violet)">📌 Pinnacle</span>':''}
           <span class="badge b-gray" style="font-size:10px">${dep(p.deporte)} ${p.deporte}</span>
           <span class="pick-mercado">${p.mercado||'1X2'}</span>
           ${p.hora_local?`<span style="font-size:10px;color:var(--amber)">🕐 ${p.hora_local}</span>`:''}
-          ${ctxTag(p.contexto_id)}
         </div>
         <div class="pick-evento">${p.evento}</div>
         <div class="pick-sub">Pick: <strong style="color:var(--text)">${p.equipo_pick}</strong> · @${fmt(p.odds_ref,2)} · ${p.liga}</div>
