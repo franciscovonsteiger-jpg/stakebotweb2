@@ -41,7 +41,7 @@ MARKETS_BY_SPORT = {
     "mma":        ["h2h"],
     "baseball":   ["h2h"],          # Solo h2h hasta tener Pinnacle confirmado
     "hockey":     ["h2h"],
-    "esports":    ["h2h"],
+    "esports":    ["h2h", "spreads", "totals"],
 }
 
 SPORTS_ACTIVE = {
@@ -82,9 +82,16 @@ SPORTS_ACTIVE = {
     "icehockey_nhl":                     {"nombre": "NHL",                  "deporte": "Hockey",  "tipo": "hockey"},
     # ── MMA ─────────────────────────────────────────────────────────────────────
     "mma_mixed_martial_arts":            {"nombre": "MMA/UFC",              "deporte": "MMA",     "tipo": "mma"},
-    # ── Esports ─────────────────────────────────────────────────────────────────
-    "esports_lol":                       {"nombre": "LoL LCK/LEC/LCS",      "deporte": "Esports", "tipo": "esports"},
+    # ── Esports — nicho con mayor ineficiencia de mercado ──────────────────────
+    # CS2: mercados h2h + map handicap + total maps
+    "esports_cs2":                       {"nombre": "CS2",                  "deporte": "Esports", "tipo": "esports"},
     "esports_csgo":                      {"nombre": "CS2 Pro League",       "deporte": "Esports", "tipo": "esports"},
+    # LoL: LCK (Korea), LEC (Europa), LCS (USA), LPL (China)
+    "esports_lol":                       {"nombre": "LoL LCK/LEC/LCS",      "deporte": "Esports", "tipo": "esports"},
+    # Dota 2: The International, DPC
+    "esports_dota2":                     {"nombre": "Dota 2",               "deporte": "Esports", "tipo": "esports"},
+    # Valorant: VCT
+    "esports_valorant":                  {"nombre": "Valorant VCT",         "deporte": "Esports", "tipo": "esports"},
 }
 
 CONTEXT_RULES = [
@@ -318,9 +325,13 @@ def _analizar(ev, meta, market_key, es_vivo=False, oddspapi_eventos=None):
     # Enriquecer con contexto real (API-Sports)
     ctx_deportivo = enriquecer_evento(home, away, meta["deporte"], meta["nombre"])
 
-    # Filtro crítico: si hay diferencia extrema de ranking en tenis, descartar
+    # Filtros críticos por deporte
     if ctx_deportivo.get("diferencia_extrema") and meta["deporte"] == "Tenis":
-        log.info(f"Tenis descartado por ranking: {home} vs {away}")
+        log.info(f"Tenis descartado por ranking extremo: {home} vs {away}")
+        return [], []
+
+    if ctx_deportivo.get("descartar_esports") and meta["deporte"] == "Esports":
+        log.info(f"Esports descartado — equipos desconocidos: {home} vs {away}")
         return [], []
 
     outcomes_set = set()
