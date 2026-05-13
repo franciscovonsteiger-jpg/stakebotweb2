@@ -103,8 +103,11 @@ CONTEXT_RULES = [
 ]
 
 MARKET_LABELS = {
-    "h2h":"Resultado (1X2)","btts":"Ambos anotan",
-    "totals":"Over/Under","spreads":"Hándicap","sets":"Sets totales",
+    "h2h":     "Resultado (1X2)",
+    "btts":    "Ambos anotan",
+    "totals":  "Over/Under games",
+    "spreads": "Hándicap sets",
+    "sets":    "Sets totales",
 }
 
 # ── Categorías de picks por cuota ─────────────────────────────────────────────
@@ -326,8 +329,9 @@ def _analizar(ev, meta, market_key, es_vivo=False, oddspapi_eventos=None):
     ctx_deportivo = enriquecer_evento(home, away, meta["deporte"], meta["nombre"])
 
     # Filtros críticos por deporte
-    if ctx_deportivo.get("diferencia_extrema") and meta["deporte"] == "Tenis":
-        log.info(f"Tenis descartado por ranking extremo: {home} vs {away}")
+    # Tenis con diferencia extrema de ranking: solo descartar h2h, permitir mercados alternativos
+    if ctx_deportivo.get("diferencia_extrema") and meta["deporte"] == "Tenis" and market_key == "h2h":
+        log.info(f"Tenis h2h descartado por ranking extremo: {home} vs {away} — buscar spreads/totals")
         return [], []
 
     if ctx_deportivo.get("descartar_esports") and meta["deporte"] == "Esports":
