@@ -1814,7 +1814,7 @@ function renderSureCard(s){
         <div style="text-align:center;padding:6px;background:var(--bg2);border-radius:6px"><div style="color:var(--text2);margin-bottom:2px">Consensus</div><div style="font-weight:600">${fmt((s.prob_consensus||0)*100,1)}%</div></div>
         <div style="text-align:center;padding:6px;background:var(--bg2);border-radius:6px"><div style="color:var(--text2);margin-bottom:2px">Modelo</div><div style="font-weight:600;color:${ncColor}">${fmt((s.prob_modelo||0)*100,1)}%</div></div>
       </div>
-      <button class="btn" style="width:100%;font-size:12px;color:var(--teal);border-color:var(--teal-border)" onclick="colocarSure(this,${_sidxStr})">✓ Colocar en Stake</button>
+      <button class="btn btn-colocar" style="width:100%;font-size:12px;color:var(--teal);border-color:var(--teal-border)" onclick="colocarSure(this,${_sidxStr})" data-evento="${s.evento}" data-pick="${s.equipo_pick}">✓ Colocar en Stake</button>
     </div>
     <div style="margin-top:8px;padding:7px 12px;background:var(--teal-bg);border-radius:var(--radius-sm);font-size:11px;color:var(--teal)">📊 ${s.señales||s.senales||'Análisis profundo'}</div>
     <div style="margin-top:6px;padding:7px 12px;background:var(--violet-bg);border-radius:var(--radius-sm);font-size:11px;color:var(--violet);display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px">
@@ -1860,7 +1860,7 @@ function renderValueCard(p){
         <div><div class="num-label">Ganancia pot.</div><div class="num-val" style="color:var(--violet)">+${fmtUSD(p.ganancia_pot)}</div></div>
         <div><div class="num-label">ROI</div><div class="num-val" style="color:var(--teal)">${fmtPct(p.roi_diario_pct)}</div></div>
       </div>
-      <button class="btn" style="font-size:12px" onclick="colocarPick(this,${_pidxStr})" class="btn btn-colocar" style="font-size:12px" data-evento="${p.evento}" data-pick="${p.equipo_pick}">Colocar en Stake →</button>→</button>
+      <button class="btn btn-colocar" style="font-size:12px" onclick="colocarPick(this,${_pidxStr})" data-evento="${p.evento}" data-pick="${p.equipo_pick}">Colocar en Stake →</button>
     </div>`:`<div class="lock-row">🔒 Stake y ROI en Plan Premium</div>`}
   </div>`;
 }
@@ -1897,7 +1897,7 @@ function renderVivoCard(p){
         <div><div class="num-label">Stake</div><div class="num-val" style="color:var(--blue)">${fmtUSD(p.stake_usd)}</div></div>
         <div><div class="num-label">Ganancia pot.</div><div class="num-val" style="color:var(--amber)">+${fmtUSD(p.ganancia_pot)}</div></div>
       </div>
-      <button class="btn" style="font-size:12px;color:var(--red);border-color:rgba(239,68,68,.4)" onclick="colocarPick(this,${_pidxStr})">⚡ Colocar ahora</button>
+      <button class="btn btn-colocar" style="font-size:12px;color:var(--red);border-color:rgba(239,68,68,.4)" onclick="colocarPick(this,${_pidxStr})" data-evento="${p.evento}" data-pick="${p.equipo_pick}">⚡ Colocar ahora</button>
     </div>`:`<div class="lock-row">🔒 Stake en Plan Premium</div>`}
   </div>`;
 }
@@ -1925,22 +1925,58 @@ async function marcarYaColocados(){
     );
     if(!todos.length) return;
 
-    // Claves simples por evento+pick
+    // Detecta la línea numérica para identificar opuestos del mismo mercado.
+    // "Over 174.5" y "Under 174.5" → misma key 'OU|174.5' → son opuestos.
+    // "Lakers (+5.5)" y "Celtics (-5.5)" → misma key 'SPR|5.5'.
+    function lineaKey(equipoPick){
+      const ep = (equipoPick||'').trim();
+      let m = ep.match(/^(Over|Under)\s+([\d.]+)$/i);
+      if(m) return 'OU|'+m[2];
+      m = ep.match(/\(([+-]?[\d.]+)\)$/);
+      if(m){
+        const v = Math.abs(parseFloat(m[1]));
+        if(!isNaN(v)) return 'SPR|'+v;
+      }
+      return null;
+    }
+
+    // Claves simples por evento+pick (mismo pick exacto)
     const colocadosKeys = new Set(todos.map(p=>
       (p.evento||'').toLowerCase().trim() + '|' +
       (p.equipo_pick||'').toLowerCase().trim()
     ));
     const colocadosEventos = new Set(todos.map(p=>(p.evento||'').toLowerCase().trim()));
 
+    // Claves de opuestos: evento+linea_numerica (Over/Under, Spread)
+    // Si está colocado "Over 174.5", el botón de "Under 174.5" debe bloquearse.
+    const colocadosOpuestos = new Set();
+    todos.forEach(p=>{
+      const lk = lineaKey(p.equipo_pick);
+      if(lk){
+        colocadosOpuestos.add((p.evento||'').toLowerCase().trim()+'|'+lk);
+      }
+    });
+
     document.querySelectorAll('.btn-colocar').forEach(btn=>{
       const evento = (btn.getAttribute('data-evento')||'').toLowerCase().trim();
       const pick   = (btn.getAttribute('data-pick')||'').toLowerCase().trim();
+      const lk     = lineaKey(pick);
+      const esOpuesto = lk && colocadosOpuestos.has(evento+'|'+lk)
+                          && !colocadosKeys.has(evento+'|'+pick);
+
       if(colocadosKeys.has(evento+'|'+pick) || colocadosEventos.has(evento)){
         btn.textContent='✓ Ya colocado';
         btn.style.color='var(--teal)';
         btn.style.borderColor='var(--teal)';
         btn.style.background='rgba(0,212,170,0.08)';
         btn.disabled=true;
+      } else if(esOpuesto){
+        btn.textContent='⚠ Opuesto ya colocado';
+        btn.style.color='var(--amber)';
+        btn.style.borderColor='var(--amber)';
+        btn.style.background='rgba(245,158,11,0.08)';
+        btn.disabled=true;
+        btn.title='Ya tenés el lado contrario de esta línea colocado. No tiene sentido apostar a ambos.';
       }
     });
   }catch(e){console.log('marcarYaColocados:',e);}
