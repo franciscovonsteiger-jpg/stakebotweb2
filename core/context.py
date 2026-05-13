@@ -231,6 +231,60 @@ def ajustar_prob_con_contexto(p_base: float, contexto: dict) -> tuple[float, lis
 
     return round(prob, 4), señales
 
+# ── ESPORTS ──────────────────────────────────────────────────────────────────
+
+# Base de datos de equipos tier-1 por juego
+# Solo apostamos en partidos donde al menos un equipo es tier-1
+ESPORTS_TIER1 = {
+    "cs2": [
+        "navi", "natus vincere", "vitality", "faze", "g2", "heroic",
+        "liquid", "ence", "spirit", "mouz", "mousesports", "astralis",
+        "cloud9", "complexity", "eternal fire", "monte", "9z", "pgl"
+    ],
+    "lol": [
+        "t1", "gen.g", "faker", "zeus", "keria", "ruler", "chovy",
+        "cloud9", "c9", "team liquid", "100 thieves", "flyquest",
+        "g2", "fnatic", "karmine corp", "vitality", "bilibili gaming",
+        "jdg", "weibo", "blg", "lng", "edward gaming", "edg"
+    ],
+    "dota2": [
+        "team spirit", "tundra", "og", "natus vincere", "navi",
+        "liquid", "entity", "betboom", "secret", "nigma", "psg.lgd"
+    ],
+    "valorant": [
+        "sentinels", "nrg", "cloud9", "loud", "fnatic", "navi",
+        "drx", "zeta", "paper rex", "prx", "evil geniuses", "eg"
+    ],
+}
+
+def es_tier1_esports(team_name: str, game: str = "cs2") -> bool:
+    """Verifica si un equipo es tier-1 en su juego."""
+    name_lower = team_name.lower()
+    tier1_list = ESPORTS_TIER1.get(game, [])
+    return any(t in name_lower for t in tier1_list)
+
+def get_contexto_esports(home: str, away: str, liga: str) -> dict:
+    """
+    Contexto para picks de esports.
+    - Solo tier-1 vs tier-1 o tier-1 vs tier-2 con edge claro
+    - Descarta partidos de equipos desconocidos
+    """
+    game = "cs2"
+    if "lol" in liga.lower() or "league" in liga.lower(): game = "lol"
+    elif "dota" in liga.lower(): game = "dota2"
+    elif "valorant" in liga.lower(): game = "valorant"
+
+    home_t1 = es_tier1_esports(home, game)
+    away_t1 = es_tier1_esports(away, game)
+
+    return {
+        "home_tier1":     home_t1,
+        "away_tier1":     away_t1,
+        "ambos_conocidos": home_t1 or away_t1,
+        "partido_calidad": home_t1 and away_t1,
+        "game":            game,
+    }
+
 # ── Función principal de enriquecimiento ─────────────────────────────────────
 
 def enriquecer_evento(home: str, away: str, deporte: str, liga: str) -> dict:
@@ -244,15 +298,21 @@ def enriquecer_evento(home: str, away: str, deporte: str, liga: str) -> dict:
     ctx = {}
     try:
         if deporte == "Tenis":
-            # Ranking de ambos jugadores
             r1 = get_ranking_tenis(home)
             r2 = get_ranking_tenis(away)
             if r1 and r2:
                 ctx["ranking_home"] = r1
                 ctx["ranking_away"] = r2
-                ctx["ranking_diff"] = r2 - r1  # positivo = rival mejor rankeado
+                ctx["ranking_diff"] = r2 - r1
                 if abs(r1 - r2) > 100:
                     ctx["diferencia_extrema"] = True
+
+        elif deporte == "Esports":
+            ctx_esports = get_contexto_esports(home, away, liga)
+            ctx.update(ctx_esports)
+            # Si ningún equipo es conocido tier-1 — descartar
+            if not ctx_esports.get("ambos_conocidos"):
+                ctx["descartar_esports"] = True
 
     except Exception as e:
         log.warning(f"Contexto {home} vs {away}: {e}")
