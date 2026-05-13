@@ -27,7 +27,7 @@ MIN_EDGE_VIVO  = 0.10                                        # En vivo más estr
 MAX_GOLD_TIPS  = int(os.getenv("MAX_GOLD_TIPS", 8))
 VENTANA_HORAS  = int(os.getenv("VENTANA_HORAS", 48))
 MIN_SURE_PROB  = float(os.getenv("MIN_SURE_PROB", 0.82))    # Slightly lower para más picks
-TZ_OFFSET      = int(os.getenv("TZ_OFFSET", -3))
+TZ_OFFSET      = -3  # Argentina/LATAM (UTC-3). Hardcodeado para evitar errores de config en Railway.
 BASE_URL       = "https://api.the-odds-api.com/v4"
 ODDSPAPI_URL   = "https://api.oddspapi.com"
 
