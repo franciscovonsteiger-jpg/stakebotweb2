@@ -1925,38 +1925,17 @@ async function marcarYaColocados(){
     );
     if(!todos.length) return;
 
-    // Normalizar nombre: quitar acentos, minúsculas, solo palabras largas
-    function normalizar(s){
-      return (s||'').toLowerCase()
-        .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
-        .replace(/[^a-z0-9 ]/g,' ')
-        .split(' ').filter(w=>w.length>3).sort().join('|');
-    }
+    // Claves simples por evento+pick
+    const colocadosKeys = new Set(todos.map(p=>
+      (p.evento||'').toLowerCase().trim() + '|' +
+      (p.equipo_pick||'').toLowerCase().trim()
+    ));
+    const colocadosEventos = new Set(todos.map(p=>(p.evento||'').toLowerCase().trim()));
 
-    // Índice de picks colocados por equipos involucrados
-    const colocadosEquipos = new Set();
-    const colocadosPickNorm = new Set();
-    todos.forEach(p=>{
-      // Por equipos del evento
-      const partes = (p.evento||'').split(/\s+vs\s+/i);
-      partes.forEach(eq => colocadosEquipos.add(normalizar(eq)));
-      // Por pick específico
-      colocadosPickNorm.add(normalizar(p.equipo_pick||''));
-    });
-
-    // Marcar botones
     document.querySelectorAll('.btn-colocar').forEach(btn=>{
-      const eventoRaw = btn.getAttribute('data-evento')||'';
-      const pickRaw   = btn.getAttribute('data-pick')||'';
-      const pickNorm  = normalizar(pickRaw);
-      const eventoPartes = eventoRaw.split(/\s+vs\s+/i);
-
-      // Verificar si el pick específico ya está colocado
-      const pickColocado = colocadosPickNorm.has(pickNorm);
-      // Verificar si algún equipo del evento ya está en stats
-      const equipoColocado = eventoPartes.some(eq => colocadosEquipos.has(normalizar(eq)));
-
-      if(pickColocado || (equipoColocado && eventoPartes.length > 1)){
+      const evento = (btn.getAttribute('data-evento')||'').toLowerCase().trim();
+      const pick   = (btn.getAttribute('data-pick')||'').toLowerCase().trim();
+      if(colocadosKeys.has(evento+'|'+pick) || colocadosEventos.has(evento)){
         btn.textContent='✓ Ya colocado';
         btn.style.color='var(--teal)';
         btn.style.borderColor='var(--teal)';
