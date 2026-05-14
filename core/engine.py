@@ -29,7 +29,18 @@ VENTANA_HORAS  = int(os.getenv("VENTANA_HORAS", 48))
 MIN_SURE_PROB  = float(os.getenv("MIN_SURE_PROB", 0.82))    # Slightly lower para más picks
 TZ_OFFSET      = -3  # Argentina/LATAM (UTC-3). Hardcodeado para evitar errores de config en Railway.
 BASE_URL       = "https://api.the-odds-api.com/v4"
-ODDSPAPI_URL   = "https://api.oddspapi.com"
+ODDSPAPI_URL   = "https://api.oddspapi.io/v4"  # Dominio correcto (.io, no .com) y versión v4
+
+# ── OddsPapi: estado interno para rate-limit awareness ────────────────────────
+# Contador de requests consumidos en el mes actual (se reinicia el 1 de cada mes).
+# Plan free = 250 req/mes. Visible en logs para evitar agotar quota silenciosamente.
+_oddspapi_state = {
+    "requests_mes": 0,
+    "mes_actual": datetime.now().month,
+    "ultimo_error": None,
+    "cache": {},  # key: f"{tournamentId}", value: {"ts": timestamp, "data": [...]}
+}
+ODDSPAPI_CACHE_TTL = 3600  # 60 min — datos frescos pero ahorra requests
 
 # ── Mercados por deporte ───────────────────────────────────────────────────────
 # Béisbol: solo h2h por ahora (más predecible sin Pinnacle)
@@ -101,6 +112,38 @@ CONTEXT_RULES = [
     {"id":"esport","descripcion":"Esport — Kelly conservador","penalizacion":0.0,"descartar":False,
      "kelly_override":0.20,"max_stake_override":0.02,"deportes":["Esports"]},
 ]
+
+# ── Mapeo OddsPapi: sport_key (The Odds API) → tournamentId (OddsPapi) ────────
+# OddsPapi usa IDs numéricos por torneo. Este mapeo se obtuvo de
+# https://api.oddspapi.io/v4/tournaments?sportId={N} en mayo 2026.
+# Mapeo conservador: solo los torneos con cobertura confirmada de Pinnacle.
+ODDSPAPI_TOURNAMENT_MAP = {
+    # ── Fútbol ────────────────────────────────────────────────────────────────
+    "soccer_epl":                           17,    # Premier League (England)
+    "soccer_spain_la_liga":                 8,     # LaLiga (Spain)
+    "soccer_germany_bundesliga":            35,    # Bundesliga (Germany)
+    "soccer_italy_serie_a":                 23,    # Serie A (Italy)
+    "soccer_uefa_champs_league":            7,     # UEFA Champions League
+    "soccer_uefa_europa_league":            679,   # UEFA Europa League
+    "soccer_uefa_europa_conference_league": 34480, # UEFA Conference League
+    "soccer_france_ligue_one":              34,    # Ligue 1 (France)
+    "soccer_netherlands_eredivisie":        37,    # Eredivisie
+    "soccer_portugal_primeira_liga":        238,   # Liga Portugal
+    "soccer_conmebol_copa_libertadores":    384,   # Copa Libertadores
+    "soccer_conmebol_copa_sudamericana":    480,   # Copa Sudamericana
+    "soccer_argentina_primera_division":    155,   # Liga Profesional (Argentina)
+    "soccer_brazil_campeonato":             325,   # Brasileiro Serie A
+    "soccer_brazil_serie_b":                390,   # Brasileiro Serie B
+    "soccer_chile_campeonato":              27665, # Primera Division (Chile)
+    "soccer_mexico_ligamx":                 27464, # Liga MX Apertura (cambia según torneo activo)
+    "soccer_usa_mls":                       242,   # MLS
+    "soccer_fifa_world_cup":                16,    # World Cup
+    # ── Otros deportes: se completarán cuando confirmemos sus IDs en próximos
+    # pasos. Por ahora OddsPapi solo se usa para fútbol — donde Pinnacle aporta
+    # más valor (líneas sharp más estables).
+    # TODO: tennis (sportId=12), basketball (11), baseball (13), hockey (15),
+    #       mma (20), esports varios (16-18, 56-61)
+}
 
 MARKET_LABELS = {
     "h2h":     "Resultado (1X2)",
@@ -267,35 +310,263 @@ def enriquecer_outcome(outcome_name, mkt_outcomes) -> str:
     return outcome_name
 
 # ── OddsPapi integration ───────────────────────────────────────────────────────
+# API correcta: https://api.oddspapi.io/v4/
+# Documentación: https://oddspapi.io/en/docs
+#
+# Estructura de respuesta (relevante):
+#   [{
+#     "fixtureId": "id...",
+#     "participant1Name": "Manchester United",
+#     "participant2Name": "Liverpool",
+#     "startTime": "2026-05-14T15:00:00.000Z",
+#     "bookmakerOdds": {
+#       "pinnacle": {
+#         "markets": {
+#           "101": {  # 101 = Full Time Result (1X2)
+#             "outcomes": {
+#               "101": {"players":{"0":{"price": 2.50}}},  # Home
+#               "102": {"players":{"0":{"price": 3.40}}},  # Draw
+#               "103": {"players":{"0":{"price": 2.90}}}   # Away
+#             }
+#           }
+#         }
+#       },
+#       "bet365": {...}, "draftkings": {...}
+#     }
+#   }]
 
-def get_oddspapi_bookmakers(sport_key: str, event_id: str = None) -> list:
-    """Obtiene odds de OddsPapi (incluye Pinnacle real) para enriquecer el análisis."""
+# Market IDs de OddsPapi (los que nos interesan)
+OP_MARKET_FULLTIME_1X2 = "101"  # equivalente a h2h en The Odds API
+
+# Outcome IDs dentro de market 101
+OP_OUTCOME_HOME = "101"
+OP_OUTCOME_DRAW = "102"
+OP_OUTCOME_AWAY = "103"
+
+
+def _oddspapi_reset_counter_if_new_month():
+    """Resetea el contador mensual si cambió el mes."""
+    mes_actual = datetime.now().month
+    if _oddspapi_state["mes_actual"] != mes_actual:
+        log.info(f"OddsPapi: nuevo mes, reseteando contador (eran {_oddspapi_state['requests_mes']} req en mes anterior)")
+        _oddspapi_state["requests_mes"] = 0
+        _oddspapi_state["mes_actual"] = mes_actual
+
+
+def _oddspapi_quota_status() -> dict:
+    """Estado actual del consumo de quota — visible para admin/logs."""
+    _oddspapi_reset_counter_if_new_month()
+    return {
+        "requests_consumidos_mes": _oddspapi_state["requests_mes"],
+        "limite_free_tier": 250,
+        "ultimo_error": _oddspapi_state["ultimo_error"],
+        "cache_entries": len(_oddspapi_state["cache"]),
+    }
+
+
+def _oddspapi_get_tournament_odds(tournament_id: int) -> list:
+    """Obtiene odds (con Pinnacle) para todos los fixtures de un torneo.
+
+    Usa cache de 60 min para no quemar quota.
+    Retorna lista de fixtures con bookmakerOdds, o [] si falla / sin key / quota agotada.
+    """
     if not ODDSPAPI_KEY:
         return []
+
+    _oddspapi_reset_counter_if_new_month()
+
+    # Cache hit?
+    cache_key = str(tournament_id)
+    cached = _oddspapi_state["cache"].get(cache_key)
+    if cached and (time.time() - cached["ts"]) < ODDSPAPI_CACHE_TTL:
+        log.debug(f"OddsPapi cache HIT tournament {tournament_id} ({len(cached['data'])} fixtures)")
+        return cached["data"]
+
+    # Aviso si estamos cerca del límite free
+    if _oddspapi_state["requests_mes"] >= 240:
+        log.warning(f"OddsPapi quota casi agotada: {_oddspapi_state['requests_mes']}/250 req. Continúo sin Pinnacle hasta el próximo mes.")
+        return []
+
     try:
-        # OddsPapi usa sport slugs diferentes — mapeo básico
-        sport_map = {
-            "baseball_mlb": "baseball_mlb",
-            "basketball_nba": "basketball_nba",
-            "icehockey_nhl": "icehockey_nhl",
-            "soccer_epl": "soccer_epl",
-            "soccer_spain_la_liga": "soccer_spain_la_liga",
-            "tennis_atp_french_open": "tennis_atp_french_open",
-        }
-        sp = sport_map.get(sport_key, sport_key)
-        r = requests.get(f"{ODDSPAPI_URL}/v1/odds", params={
+        # Endpoint correcto: /v4/odds-by-tournaments?bookmaker=pinnacle&tournamentIds=17
+        url = f"{ODDSPAPI_URL}/odds-by-tournaments"
+        params = {
             "apiKey": ODDSPAPI_KEY,
-            "sport": sp,
-            "regions": "eu,uk,us",
-            "markets": "h2h",
+            "tournamentIds": str(tournament_id),
+            "bookmaker": "pinnacle",  # solo Pinnacle — es lo que nos da edge sharp
             "oddsFormat": "decimal",
-            "bookmakers": "pinnacle,bet365,betfair,williamhill",
-        }, timeout=15)
-        if r.status_code == 200:
-            return r.json() or []
+        }
+        r = requests.get(url, params=params, timeout=20)
+        _oddspapi_state["requests_mes"] += 1
+
+        if r.status_code == 401:
+            _oddspapi_state["ultimo_error"] = "INVALID_API_KEY"
+            log.error(f"OddsPapi: API key inválida (HTTP 401). Verificá ODDSPAPI_KEY en Railway.")
+            return []
+        if r.status_code == 429:
+            _oddspapi_state["ultimo_error"] = "RATE_LIMITED"
+            log.error(f"OddsPapi: rate limit alcanzado (HTTP 429). Quota mensual agotada.")
+            return []
+        if r.status_code != 200:
+            _oddspapi_state["ultimo_error"] = f"HTTP_{r.status_code}"
+            log.warning(f"OddsPapi tournament {tournament_id}: HTTP {r.status_code}")
+            return []
+
+        data = r.json() or []
+        _oddspapi_state["cache"][cache_key] = {"ts": time.time(), "data": data}
+        _oddspapi_state["ultimo_error"] = None
+        log.info(f"OddsPapi tournament {tournament_id}: {len(data)} fixtures con Pinnacle · {_oddspapi_state['requests_mes']}/250 req mensuales")
+        return data
+
+    except requests.Timeout:
+        _oddspapi_state["ultimo_error"] = "TIMEOUT"
+        log.warning(f"OddsPapi tournament {tournament_id}: timeout")
+        return []
     except Exception as e:
-        log.debug(f"OddsPapi {sport_key}: {e}")
-    return []
+        _oddspapi_state["ultimo_error"] = str(e)
+        log.error(f"OddsPapi tournament {tournament_id}: {e}")
+        return []
+
+
+def _normalize_name(s: str) -> str:
+    """Normaliza nombres de equipos para matching entre APIs.
+    Quita acentos, lowercase, abreviaturas comunes."""
+    if not s:
+        return ""
+    s = s.lower().strip()
+    # Quitar abreviaturas y palabras de relleno comunes
+    for w in [" fc", " cf", " ac", " sc", " united", " utd", " city", " athletic", " club"]:
+        s = s.replace(w, "")
+    # Normalizar caracteres latinos comunes
+    for a, b in [("á","a"),("à","a"),("â","a"),("ã","a"),("ä","a"),
+                 ("é","e"),("è","e"),("ê","e"),("ë","e"),
+                 ("í","i"),("ì","i"),("î","i"),("ï","i"),
+                 ("ó","o"),("ò","o"),("ô","o"),("õ","o"),("ö","o"),
+                 ("ú","u"),("ù","u"),("û","u"),("ü","u"),
+                 ("ñ","n"),("ç","c")]:
+        s = s.replace(a, b)
+    # Quitar espacios extra
+    return " ".join(s.split())
+
+
+def _match_fixture(home: str, away: str, op_fixtures: list) -> Optional[dict]:
+    """Encuentra el fixture de OddsPapi que matchea con los equipos dados.
+    Hace fuzzy match por nombre normalizado."""
+    h_norm = _normalize_name(home)
+    a_norm = _normalize_name(away)
+    if not h_norm or not a_norm:
+        return None
+
+    for f in op_fixtures:
+        p1 = _normalize_name(f.get("participant1Name", ""))
+        p2 = _normalize_name(f.get("participant2Name", ""))
+        # Match exacto (después de normalizar) o que uno contenga al otro (caso "Man Utd" vs "Manchester")
+        if (h_norm in p1 or p1 in h_norm) and (a_norm in p2 or p2 in a_norm):
+            return f
+        # También probar invertido (a veces home/away se invierte entre APIs)
+        if (h_norm in p2 or p2 in h_norm) and (a_norm in p1 or p1 in a_norm):
+            return f
+    return None
+
+
+def _convert_op_to_bookmaker_format(op_fixture: dict, market_key: str) -> Optional[dict]:
+    """Convierte el fixture de OddsPapi al formato bookmaker que usa el engine.
+
+    El engine espera estructura tipo The Odds API:
+      {"key": "pinnacle", "markets": [{"key": "h2h", "outcomes": [{"name": "Team A", "price": 2.5}]}]}
+
+    Retorna ese dict o None si no hay datos de Pinnacle para este mercado.
+    """
+    op_pinnacle = op_fixture.get("bookmakerOdds", {}).get("pinnacle")
+    if not op_pinnacle:
+        return None
+
+    p1_name = op_fixture.get("participant1Name", "")
+    p2_name = op_fixture.get("participant2Name", "")
+
+    # Por ahora solo soportamos h2h (mercado 101 en OddsPapi)
+    # Otros mercados (totals, spreads) requieren mapeo de market IDs adicional —
+    # se agregarán cuando ampliemos el piloto.
+    if market_key != "h2h":
+        return None
+
+    market_101 = op_pinnacle.get("markets", {}).get(OP_MARKET_FULLTIME_1X2)
+    if not market_101:
+        return None
+
+    outcomes_raw = market_101.get("outcomes", {})
+    outcomes_out = []
+
+    # Home win (outcome 101)
+    home_oc = outcomes_raw.get(OP_OUTCOME_HOME, {})
+    home_price = home_oc.get("players", {}).get("0", {}).get("price")
+    if home_price and home_price > 1.0:
+        outcomes_out.append({"name": p1_name, "price": float(home_price)})
+
+    # Draw (outcome 102) — solo si existe (no aplica para tenis/básquet/etc)
+    draw_oc = outcomes_raw.get(OP_OUTCOME_DRAW, {})
+    draw_price = draw_oc.get("players", {}).get("0", {}).get("price")
+    if draw_price and draw_price > 1.0:
+        outcomes_out.append({"name": "Draw", "price": float(draw_price)})
+
+    # Away win (outcome 103)
+    away_oc = outcomes_raw.get(OP_OUTCOME_AWAY, {})
+    away_price = away_oc.get("players", {}).get("0", {}).get("price")
+    if away_price and away_price > 1.0:
+        outcomes_out.append({"name": p2_name, "price": float(away_price)})
+
+    if not outcomes_out:
+        return None
+
+    return {
+        "key": "pinnacle",
+        "title": "Pinnacle",
+        "markets": [{"key": market_key, "outcomes": outcomes_out}],
+    }
+
+
+def get_oddspapi_bookmakers(sport_key: str, eventos_tao: list = None) -> list:
+    """Obtiene fixtures de OddsPapi con Pinnacle para un sport_key dado.
+
+    Versión nueva (mayo 2026): usa api.oddspapi.io/v4/odds-by-tournaments con
+    tournamentId numérico. Cache 60 min. Solo pide si hay partidos en próximas
+    12 horas (regla dinámica) para minimizar consumo de quota.
+
+    Args:
+        sport_key: clave de The Odds API (ej "soccer_epl")
+        eventos_tao: lista de eventos de The Odds API para este sport.
+            Si está provista, solo pedimos OddsPapi si hay eventos en próximas 12hs.
+            Si es None, pedimos siempre (modo legacy).
+
+    Returns:
+        Lista de fixtures de OddsPapi (con bookmakerOdds.pinnacle), o [] si:
+        - No hay key configurada
+        - El sport no está mapeado a un tournamentId
+        - No hay eventos próximos en 12hs (cuando eventos_tao se pasa)
+        - La request falla / quota agotada
+    """
+    if not ODDSPAPI_KEY:
+        return []
+
+    tournament_id = ODDSPAPI_TOURNAMENT_MAP.get(sport_key)
+    if not tournament_id:
+        log.debug(f"OddsPapi: sport_key '{sport_key}' no mapeado, saltando enriquecimiento Pinnacle")
+        return []
+
+    # Regla dinámica: solo pedir si hay partidos en próximas 12 horas.
+    # Para partidos lejanos, las líneas de Pinnacle todavía no se estabilizaron
+    # y no aporta tanto valor — mejor reservar quota.
+    if eventos_tao is not None:
+        hay_partido_proximo = any(
+            0 < horas_hasta(ev.get("commence_time", "")) <= 12
+            for ev in eventos_tao
+        )
+        if not hay_partido_proximo:
+            log.debug(f"OddsPapi {sport_key}: sin partidos en próximas 12hs, saltando")
+            return []
+
+    return _oddspapi_get_tournament_odds(tournament_id)
+
 
 # ── Analizador ────────────────────────────────────────────────────────────────
 
@@ -306,18 +577,16 @@ def _analizar(ev, meta, market_key, es_vivo=False, oddspapi_eventos=None):
     bookmakers   = list(ev.get("bookmakers", []))
     if not bookmakers: return [], []
 
-    # Enriquecer con datos de OddsPapi si están disponibles (Pinnacle real)
+    # Enriquecer con datos de OddsPapi si están disponibles (Pinnacle real).
+    # Nueva estructura: oddspapi_eventos viene del endpoint /odds-by-tournaments
+    # con campos participant1Name/participant2Name y bookmakerOdds.pinnacle nested.
     if oddspapi_eventos:
-        for op_ev in oddspapi_eventos:
-            if (op_ev.get("home_team","").lower() == home.lower() and
-                op_ev.get("away_team","").lower() == away.lower()):
-                for bm in op_ev.get("bookmakers", []):
-                    if bm.get("key") == "pinnacle":
-                        # Agregar Pinnacle real si no está
-                        if not any(b.get("key") == "pinnacle" for b in bookmakers):
-                            bookmakers.append(bm)
-                            log.debug(f"Pinnacle enriquecido: {home} vs {away}")
-                break
+        op_match = _match_fixture(home, away, oddspapi_eventos)
+        if op_match:
+            op_bm = _convert_op_to_bookmaker_format(op_match, market_key)
+            if op_bm and not any(b.get("key") == "pinnacle" for b in bookmakers):
+                bookmakers.append(op_bm)
+                log.info(f"Pinnacle enriquecido: {home} vs {away} ({market_key})")
 
     horas       = horas_hasta(commence)
     hora_local  = format_hora(commence, horas)
@@ -455,21 +724,14 @@ def escanear_mercado(bankroll_usuario: float = None) -> dict:
     en_curso = []
     total = 0
 
-    # Pre-cargar datos de OddsPapi para los sports principales
-    oddspapi_cache = {}
-    if ODDSPAPI_KEY:
-        for sport_key in ["baseball_mlb", "basketball_nba", "icehockey_nhl", "soccer_epl"]:
-            datos = get_oddspapi_bookmakers(sport_key)
-            if datos:
-                oddspapi_cache[sport_key] = datos
-                log.info(f"OddsPapi {sport_key}: {len(datos)} eventos con Pinnacle")
-            time.sleep(0.2)
+    # OddsPapi: ya no pre-cargamos al inicio. Lo pedimos dentro del loop, solo
+    # cuando hay partidos en próximas 12hs (regla dinámica para ahorrar quota).
+    # Estado consumido se loguea al final del scan.
 
     for sport_key, meta in SPORTS_ACTIVE.items():
         tipo_sport  = meta.get("tipo", "soccer")
         markets     = MARKETS_BY_SPORT.get(tipo_sport, ["h2h"])
         markets_str = ",".join(markets)
-        op_eventos  = oddspapi_cache.get(sport_key, [])
 
         try:
             r = requests.get(f"{BASE_URL}/sports/{sport_key}/odds/", params={
@@ -483,6 +745,10 @@ def escanear_mercado(bankroll_usuario: float = None) -> dict:
 
             remaining = r.headers.get("x-requests-remaining","?")
             log.info(f"{meta['nombre']}: {len(eventos)} eventos · {remaining} requests restantes")
+
+            # OddsPapi: solo pedir si este sport está mapeado y hay partidos
+            # próximos. La función decide internamente (regla 12hs).
+            op_eventos = get_oddspapi_bookmakers(sport_key, eventos)
 
             for ev in eventos:
                 total += 1
@@ -604,6 +870,12 @@ def escanear_mercado(bankroll_usuario: float = None) -> dict:
     con_pinnacle = sum(1 for p in gold_picks if p.tiene_pinnacle)
     log.info(f"Scan OK — {len(gold_picks)} Gold ({con_pinnacle} con Pinnacle) · {len(all_sure)} Sure · {len(vivo_top)} Vivo")
 
+    # Status de quota OddsPapi (visible en logs de Railway)
+    if ODDSPAPI_KEY:
+        quota = _oddspapi_quota_status()
+        log.info(f"OddsPapi quota: {quota['requests_consumidos_mes']}/250 req/mes · cache: {quota['cache_entries']} torneos" +
+                 (f" · último error: {quota['ultimo_error']}" if quota['ultimo_error'] else ""))
+
     return {
         "timestamp":          datetime.now().isoformat(),
         "total_eventos":      total,
@@ -619,4 +891,5 @@ def escanear_mercado(bankroll_usuario: float = None) -> dict:
         "picks_vivo":         [asdict(p) for p in vivo_top],
         "en_curso":           en_curso[:20],
         "bankroll":           BANKROLL,
+        "oddspapi_quota":     _oddspapi_quota_status() if ODDSPAPI_KEY else None,
     }
