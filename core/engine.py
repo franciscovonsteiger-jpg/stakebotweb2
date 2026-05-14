@@ -47,7 +47,7 @@ ODDSPAPI_CACHE_TTL = 3600  # 60 min — datos frescos pero ahorra requests
 # Con OddsPapi habilitamos totals y spreads en béisbol también
 MARKETS_BY_SPORT = {
     "soccer":     ["h2h", "btts", "totals"],
-    "tennis":     ["h2h", "sets", "alternate_sets"],  # h2h solo cuando hay valor real + sets y games
+    "tennis":     ["h2h", "spreads", "totals"],  # The Odds API soporta solo estos para tenis
     "basketball": ["h2h", "totals"],
     "mma":        ["h2h"],
     "baseball":   ["h2h"],          # Solo h2h hasta tener Pinnacle confirmado
@@ -799,10 +799,26 @@ def escanear_mercado(bankroll_usuario: float = None) -> dict:
                 "apiKey": API_KEY, "regions": "eu,uk,us,au",
                 "markets": markets_str, "oddsFormat": "decimal",
             }, timeout=20)
-            if r.status_code == 422: continue
+
+            # 422: mercado no soportado por este sport. Fallback a solo h2h.
+            # Antes esto saltaba el deporte silenciosamente y perdíamos picks.
+            if r.status_code == 422 and markets != ["h2h"]:
+                log.warning(f"{meta['nombre']}: mercados {markets_str} no soportados, reintentando con solo h2h")
+                markets = ["h2h"]
+                markets_str = "h2h"
+                r = requests.get(f"{BASE_URL}/sports/{sport_key}/odds/", params={
+                    "apiKey": API_KEY, "regions": "eu,uk,us,au",
+                    "markets": markets_str, "oddsFormat": "decimal",
+                }, timeout=20)
+
+            if r.status_code == 422:
+                log.warning(f"{meta['nombre']} ({sport_key}): 422 — sport key inválido o fuera de temporada")
+                continue
             r.raise_for_status()
             eventos = r.json()
-            if not eventos: continue
+            if not eventos:
+                log.info(f"{meta['nombre']}: 0 eventos (sport activo pero sin partidos próximos)")
+                continue
 
             remaining = r.headers.get("x-requests-remaining","?")
             log.info(f"{meta['nombre']}: {len(eventos)} eventos · {remaining} requests restantes")
