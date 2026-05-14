@@ -1,4 +1,4 @@
-import os, asyncio, logging
+import os, asyncio, logging, traceback
 from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI, BackgroundTasks, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -17,13 +17,11 @@ cache = {"resultado": None, "ultimo_scan": None, "scanning": False,
 async def run_scan_bg():
     if cache["scanning"]: return
     cache["scanning"] = True; cache["error"] = None
+    resultado = None
     try:
         from core.engine import escanear_mercado
-        from core.notifier import notificar_usuarios_premium
         from core.database import get_all_users
         loop = asyncio.get_event_loop()
-        # Obtener bankroll del admin para el scan del sistema
-        from core.database import get_all_users
         usuarios_scan = await get_all_users()
         admin_user = next((u for u in usuarios_scan if u["plan"] == "admin"), None)
         bankroll_scan = float(admin_user["bankroll"]) if admin_user else float(os.getenv("BANKROLL_USD", 1000000))
@@ -33,12 +31,23 @@ async def run_scan_bg():
         _ahora_arg = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=-3)))
         cache["ultimo_scan"] = _ahora_arg.strftime("%d/%m/%Y %H:%M:%S")
         log.info(f"Scan OK — {len(resultado.get('gold_tips',[]))} Gold · {len(resultado.get('sure_bets',[]))} Sure · {len(resultado.get('picks_vivo',[]))} Vivo")
-        usuarios = await get_all_users()
-        cache["gold_enviados"] = notificar_usuarios_premium(resultado, usuarios, cache["gold_enviados"])
     except Exception as e:
-        cache["error"] = str(e); log.error(f"Error scan: {e}")
+        cache["error"] = str(e)
+        # Traceback completo en log para diagnosticar errores raros como 'odds_stake'
+        log.error(f"Error scan: {type(e).__name__}: {e}\n{traceback.format_exc()}")
     finally:
         cache["scanning"] = False
+
+    # Notificar a usuarios premium FUERA del try del scan: si el notifier
+    # tira error, no debe marcar el scan como fallido.
+    if resultado:
+        try:
+            from core.notifier import notificar_usuarios_premium
+            from core.database import get_all_users
+            usuarios = await get_all_users()
+            cache["gold_enviados"] = notificar_usuarios_premium(resultado, usuarios, cache["gold_enviados"])
+        except Exception as e:
+            log.error(f"Error notifier (no afecta scan): {type(e).__name__}: {e}\n{traceback.format_exc()}")
 
 async def scanner_loop():
     while True:
