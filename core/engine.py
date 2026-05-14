@@ -148,10 +148,33 @@ ODDSPAPI_TOURNAMENT_MAP = {
 MARKET_LABELS = {
     "h2h":     "Resultado (1X2)",
     "btts":    "Ambos anotan",
-    "totals":  "Over/Under games",
-    "spreads": "Hándicap sets",
+    "totals":  "Over/Under",
+    "spreads": "Hándicap",
     "sets":    "Sets totales",
 }
+
+# Labels específicos por tipo de deporte (más informativos)
+# The Odds API usa "spreads" y "totals" pero la unidad varía por deporte:
+#  - Tenis: hándicap = GAMES, totals = GAMES
+#  - Básquet/Hockey/Béisbol: hándicap = PUNTOS/GOLES/RUNS, totals = idem
+#  - Fútbol: hándicap = GOLES (asian handicap), totals = GOLES
+def market_label_for(market_key: str, tipo_sport: str) -> str:
+    base = MARKET_LABELS.get(market_key, market_key)
+    if market_key == "totals":
+        if tipo_sport == "tennis":      return "Over/Under games"
+        if tipo_sport == "basketball":  return "Over/Under puntos"
+        if tipo_sport == "soccer":      return "Over/Under goles"
+        if tipo_sport == "hockey":      return "Over/Under goles"
+        if tipo_sport == "baseball":    return "Over/Under runs"
+        return base
+    if market_key == "spreads":
+        if tipo_sport == "tennis":      return "Hándicap games"
+        if tipo_sport == "basketball":  return "Hándicap puntos"
+        if tipo_sport == "soccer":      return "Hándicap goles"
+        if tipo_sport == "hockey":      return "Hándicap goles"
+        if tipo_sport == "baseball":    return "Hándicap runs"
+        return base
+    return base
 
 # ── Categorías de picks por cuota ─────────────────────────────────────────────
 # Seguro: @1.30-@2.10 — mayor win rate, menor varianza
@@ -635,7 +658,7 @@ def _analizar(ev, meta, market_key, es_vivo=False, oddspapi_eventos=None):
 
     horas       = horas_hasta(commence)
     hora_local  = format_hora(commence, horas)
-    mercado_lbl = MARKET_LABELS.get(market_key, market_key)
+    mercado_lbl = market_label_for(market_key, meta.get("tipo", "soccer"))
     min_edge_ok = MIN_EDGE_VIVO if es_vivo else MIN_EDGE
     tiene_pinnacle = any(b.get("key") == "pinnacle" for b in bookmakers)
 
