@@ -177,10 +177,16 @@ def market_label_for(market_key: str, tipo_sport: str) -> str:
     return base
 
 # ── Categorías de picks por cuota ─────────────────────────────────────────────
-# Seguro: @1.30-@2.10 — mayor win rate, menor varianza
-# Alto Valor: @2.10-@3.00 — mayor ganancia, más arriesgado
+# Política conservadora: el usuario prefiere picks con probabilidad implícita
+# razonable (>40%). Cuotas >2.50 son demasiado azarosas aunque haya "edge".
+# Seguro: @1.30-@2.10 — mayor win rate, menor varianza (>47% prob implícita)
+# Alto Valor: @2.10-@2.50 — equilibrio riesgo/recompensa (>40% prob implícita)
+# Especulativo: @2.50-@3.00 — solo para mostrar como referencia, NO se incluyen
+# como Gold Tips (filtrado por ODDS_GOLD_MAX abajo).
 ODDS_SEGURO_MAX = 2.10
-ODDS_ALTO_MAX   = 3.50
+ODDS_ALTO_MAX   = 2.50
+ODDS_GOLD_MAX   = 2.50  # Cuota máxima que se acepta como Gold Tip. Picks con
+                        # cuotas >2.50 quedan en "descartados" con razón clara.
 
 @dataclass
 class ValuePick:
@@ -767,10 +773,16 @@ def _analizar(ev, meta, market_key, es_vivo=False, oddspapi_eventos=None):
         else:
             categoria = "especulativo"
 
-        desc  = ctx.get("descartar",False) or edge < min_edge_ok or anomalo or mejor < 1.15
+        # Filtro de cuota máxima: descarta picks con cuota >2.50 (preferencia
+        # del usuario por probabilidades implícitas >40%). Estos picks se ven
+        # en la sección "Descartados" para referencia pero NUNCA como Gold Tips.
+        cuota_alta = mejor > ODDS_GOLD_MAX
+
+        desc  = ctx.get("descartar",False) or edge < min_edge_ok or anomalo or mejor < 1.15 or cuota_alta
         razon = None
         if ctx.get("descartar"):    razon = ctx["descripcion"]
         elif anomalo:               razon = f"Edge {edge*100:.1f}% anómalo"
+        elif cuota_alta:            razon = f"Cuota @{mejor:.2f} > máximo @{ODDS_GOLD_MAX:.2f} (preferencia conservadora)"
         elif mejor < 1.15:          razon = "Cuota muy baja"
         elif edge < min_edge_ok:    razon = f"Edge {edge*100:.1f}% bajo mínimo ({min_edge_ok*100:.0f}%)"
 
@@ -935,17 +947,20 @@ def escanear_mercado(bankroll_usuario: float = None) -> dict:
     all_value.sort(key=lambda p: p.gold_score, reverse=True)
 
     # Candidatos: edge ≥ MIN_EDGE, cuota en rango útil
-    # Priorizar "seguro" (@1.30-@2.10) con Pinnacle confirmado
+    # Política conservadora: SOLO seguros (≤@2.10) y alto_valor (≤@2.50).
+    # Los especulativos (>@2.50) ya quedaron descartados por el filtro de cuota
+    # alta en _analizar(), pero igual los excluimos del pool por seguridad.
     candidatos_seguros   = [p for p in all_value if not p.descartado and p.categoria == "seguro"]
     candidatos_alto      = [p for p in all_value if not p.descartado and p.categoria == "alto_valor"]
-    candidatos_especul   = [p for p in all_value if not p.descartado and p.categoria == "especulativo"]
+    # candidatos_especul → eliminados del flujo. Solo aparecen en "descartados".
 
-    # Marcar Gold: primero seguros, luego alto valor, completar con especulativos
+    # Marcar Gold: primero seguros, luego alto valor. Sin completar con especulativos
+    # (preferencia del usuario por cuotas razonables, máximo @2.50).
     gold_target = MAX_GOLD_TIPS
     seleccionados = []
     seen_ev = set()
 
-    for pool in [candidatos_seguros, candidatos_alto, candidatos_especul]:
+    for pool in [candidatos_seguros, candidatos_alto]:
         for p in pool:
             if len(seleccionados) >= gold_target: break
             if p.evento not in seen_ev:
