@@ -255,6 +255,44 @@ def best_odds(bookmakers, outcome_name, market_key) -> tuple[float, str]:
                 best = odds_t; casa = bm.get("title", bm.get("key", ""))
     return best, casa
 
+def best_odds_filtered(bookmakers, outcome_name, market_key, max_dev_pct: float = 0.05) -> tuple[float, str, bool]:
+    """Versión anti-outlier de best_odds.
+
+    Calcula el promedio de cuotas de todas las casas y descarta la mejor cuota
+    si difiere más de `max_dev_pct` del promedio (default 5%). Esto evita
+    picks de edge fantasma causados por una sola casa con cuota errónea o muy
+    diferente al consenso del mercado.
+
+    Returns:
+        (mejor_cuota, nombre_casa, fue_outlier_descartado)
+        Si la mejor era outlier, retorna la SEGUNDA mejor cuota legítima.
+    """
+    # Recopilar todas las cuotas válidas
+    cuotas = []
+    for bm in bookmakers:
+        for mkt in bm.get("markets", []):
+            if mkt["key"] != market_key: continue
+            odds_t = next((o["price"] for o in mkt["outcomes"] if o["name"] == outcome_name), None)
+            if odds_t and odds_t > 1.0:
+                cuotas.append((odds_t, bm.get("title", bm.get("key", ""))))
+
+    if not cuotas:
+        return 0.0, "", False
+    if len(cuotas) < 3:
+        # Pocas casas: no podemos detectar outliers, usar la mejor
+        cuotas.sort(reverse=True)
+        return cuotas[0][0], cuotas[0][1], False
+
+    cuotas.sort(reverse=True)
+    # Promedio excluyendo la cuota más alta (para no contaminarse del outlier)
+    avg_sin_max = sum(c[0] for c in cuotas[1:]) / len(cuotas[1:])
+    max_aceptable = avg_sin_max * (1 + max_dev_pct)
+
+    if cuotas[0][0] > max_aceptable:
+        # La mejor cuota es outlier — descartar y usar la segunda
+        return cuotas[1][0], cuotas[1][1], True
+    return cuotas[0][0], cuotas[0][1], False
+
 def calc_modelo_prob(p_pinn, p_cons, penali, n_casas) -> float:
     if p_pinn is not None:
         # Con Pinnacle real: peso mayor a Pinnacle
@@ -294,8 +332,15 @@ def gold_score_fn(prob, odds, edge, horas, tiene_pinnacle) -> float:
     elif odds < 1.30:         score *= 0.60   # muy baja cuota
     # Bonificación por Pinnacle real
     if tiene_pinnacle:        score *= 1.20
-    # Bonificación por tiempo
-    if 0 < horas <= 6:        score *= 1.10
+    # Bonificación POR PROXIMIDAD TEMPORAL (clave para mostrar primero los partidos
+    # de hoy/próximas horas, no los de mañana). Cuanto más lejano, más penalización
+    # porque las cuotas y el modelo son menos confiables a 24-48hs.
+    if 0 < horas <= 3:        score *= 1.50   # ⚡ próximas 3hs — máxima prioridad
+    elif horas <= 6:          score *= 1.30   # hoy mismo
+    elif horas <= 12:         score *= 1.15   # mismo día / noche
+    elif horas <= 24:         score *= 1.00   # mañana — neutral
+    elif horas <= 36:         score *= 0.80   # pasado mañana — penaliza
+    else:                     score *= 0.60   # >36hs — cuotas inestables, baja prioridad
     return round(score, 6)
 
 def enriquecer_outcome(outcome_name, mkt_outcomes) -> str:
@@ -607,6 +652,15 @@ def _analizar(ev, meta, market_key, es_vivo=False, oddspapi_eventos=None):
         log.info(f"Esports descartado — equipos desconocidos: {home} vs {away}")
         return [], []
 
+    # Béisbol h2h: bloqueado hasta activar pitcher data en context.py.
+    # En MLB, el pitcher abridor determina ~60-70% del resultado. Sin esa info,
+    # el modelo está ciego y genera picks de pérdida esperada (causa principal
+    # del -19% del día 2). Permitimos totals/spreads cuando los habilitemos,
+    # pero NO h2h hasta tener pitcher data.
+    if meta.get("tipo") == "baseball" and market_key == "h2h":
+        log.debug(f"MLB h2h bloqueado por falta de pitcher data: {home} vs {away}")
+        return [], []
+
     outcomes_set = set()
     outcomes_map = {}  # original → display
     for bm in bookmakers:
@@ -625,8 +679,10 @@ def _analizar(ev, meta, market_key, es_vivo=False, oddspapi_eventos=None):
         if p_cons is None: continue
 
         n_casas = odds_count(bookmakers, outcome_name, market_key)
-        mejor, _ = best_odds(bookmakers, outcome_name, market_key)
+        mejor, _, fue_outlier = best_odds_filtered(bookmakers, outcome_name, market_key, max_dev_pct=0.05)
         if mejor <= 1.20: continue  # Evitar favoritos extremos sin valor real
+        if fue_outlier:
+            log.info(f"Anti-outlier: descartada mejor cuota de {home} vs {away} · {outcome_name} (era >5% del promedio del consenso)")
         # En tenis h2h: si la cuota es muy baja Y no hay Pinnacle, descartar
         # (partidos muy desequilibrados donde el consenso puede estar equivocado)
         if market_key == "h2h" and meta.get("tipo") == "tennis" and mejor < 1.45 and not tiene_pinnacle:
@@ -671,8 +727,13 @@ def _analizar(ev, meta, market_key, es_vivo=False, oddspapi_eventos=None):
         gan     = round(stake * (mejor - 1), 2)
         gscore  = gold_score_fn(p_mod, mejor, edge, horas, tiene_pinnacle)
 
-        # Límite edge anómalo — más permisivo con Pinnacle
-        limite  = 0.60 if tiene_pinnacle else 0.40
+        # Límite edge anómalo — realista según teoría de mercados eficientes.
+        # En mercados líquidos (NBA/NHL/EPL/MLB), edge >15% prácticamente no
+        # existe. Pinnacle margin ~2%, casas retail ~5-7%. Un edge real puede ir
+        # hasta 10-12%. Más allá = error de datos, casa rara o mal cálculo.
+        # Con Pinnacle real (más confiable): permitimos hasta 15%
+        # Sin Pinnacle: más estricto, solo hasta 12%
+        limite  = 0.15 if tiene_pinnacle else 0.12
         anomalo = edge > limite
 
         # Categoría por cuota
