@@ -430,6 +430,136 @@ async def resultado_pick(pick_id: int, request: Request):
     from core.database import actualizar_resultado
     return JSONResponse(await actualizar_resultado(pick_id, user["id"], data))
 
+
+@app.post("/api/picks/auto-resultados")
+async def auto_resultados(request: Request):
+    """Consulta The Odds API por scores de partidos cerrados y sugiere
+    resultados W/L/Push para picks pendientes del usuario.
+
+    NO marca automáticamente. Devuelve sugerencias para que el usuario confirme
+    en la UI. Las sugerencias se guardan en la columna `resultado_sugerido`
+    de cada pick (junto con los scores) para que el frontend las muestre.
+
+    Response:
+    {
+        "ok": true,
+        "picks_evaluados": int,
+        "sugerencias": [
+            {
+                "pick_db_id": 123,
+                "evento": "Inter Milan vs Hellas Verona",
+                "equipo_pick": "Inter Milan",
+                "mercado": "Resultado (1X2)",
+                "odds_ref": 1.23,
+                "stake_usd": 5000.0,
+                "sugerido": "ganado",  // ganado/perdido/push/indeterminado
+                "score_home": 2,
+                "score_away": 0,
+                "razon": "Inter Milan ganó 2-0"
+            }, ...
+        ],
+        "errores": [str, ...]  // sport_keys que fallaron
+    }
+    """
+    user = await require_auth(request)
+    if not user: return JSONResponse({"ok":False,"error":"No autenticado"}, status_code=401)
+
+    try:
+        from core.database import get_picks_pendientes_para_evaluar, guardar_resultado_sugerido
+        from core.engine import consultar_scores, evaluar_resultado
+
+        # Paso 1: Listar picks pendientes del usuario cuyo partido ya terminó
+        pendientes = await get_picks_pendientes_para_evaluar(user["id"], margen_minutos=180)
+        log.info(f"auto-resultados: {len(pendientes)} picks pendientes evaluables para user {user['id']}")
+
+        if not pendientes:
+            return JSONResponse({
+                "ok": True,
+                "picks_evaluados": 0,
+                "sugerencias": [],
+                "errores": [],
+                "mensaje": "No hay picks pendientes con partido cerrado todavía"
+            })
+
+        # Paso 2: Agrupar por sport_key para minimizar llamadas a la API
+        sport_keys = list({p["sport_key"] for p in pendientes if p.get("sport_key")})
+
+        # Cache local: sport_key → { event_id → score_data }
+        scores_por_sport = {}
+        errores = []
+        for sk in sport_keys:
+            try:
+                games = consultar_scores(sk)
+                index = {g.get("id"): g for g in games if g.get("id")}
+                scores_por_sport[sk] = index
+            except Exception as e:
+                log.error(f"Error consultando scores de {sk}: {e}")
+                errores.append(f"{sk}: {str(e)[:100]}")
+                scores_por_sport[sk] = {}
+
+        # Paso 3: Evaluar cada pick
+        sugerencias = []
+        for pick in pendientes:
+            sport_key = pick.get("sport_key")
+            event_id  = pick.get("event_id")
+            score_data = scores_por_sport.get(sport_key, {}).get(event_id)
+
+            if not score_data:
+                # Partido no encontrado en scores (puede que aún no esté procesado)
+                sugerencias.append({
+                    "pick_db_id":   pick["id"],
+                    "evento":       pick.get("evento", ""),
+                    "equipo_pick":  pick.get("equipo_pick", ""),
+                    "mercado":      pick.get("mercado", ""),
+                    "odds_ref":     float(pick.get("odds_ref") or 0),
+                    "stake_usd":    float(pick.get("stake_usd") or 0),
+                    "sugerido":     "indeterminado",
+                    "score_home":   None,
+                    "score_away":   None,
+                    "razon":        "Partido aún no aparece en /scores (puede tardar hasta 3hs después del cierre)"
+                })
+                continue
+
+            evaluacion = evaluar_resultado(pick, score_data)
+
+            # Guardar sugerencia en DB (no cambia estado)
+            try:
+                await guardar_resultado_sugerido(
+                    pick["id"], user["id"],
+                    evaluacion["sugerido"],
+                    evaluacion["score_home"],
+                    evaluacion["score_away"]
+                )
+            except Exception as e:
+                log.warning(f"No pude guardar sugerencia para pick {pick['id']}: {e}")
+
+            sugerencias.append({
+                "pick_db_id":   pick["id"],
+                "evento":       pick.get("evento", ""),
+                "equipo_pick":  pick.get("equipo_pick", ""),
+                "mercado":      pick.get("mercado", ""),
+                "odds_ref":     float(pick.get("odds_ref") or 0),
+                "stake_usd":    float(pick.get("stake_usd") or 0),
+                "sugerido":     evaluacion["sugerido"],
+                "score_home":   evaluacion["score_home"],
+                "score_away":   evaluacion["score_away"],
+                "razon":        evaluacion["razon"],
+            })
+
+        log.info(f"auto-resultados: {len(sugerencias)} sugerencias generadas para user {user['id']}")
+        return JSONResponse({
+            "ok": True,
+            "picks_evaluados": len(sugerencias),
+            "sugerencias": sugerencias,
+            "errores": errores,
+        })
+
+    except Exception as e:
+        import traceback
+        log.error(f"Error auto-resultados: {type(e).__name__}: {e}\n{traceback.format_exc()}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
 @app.get("/api/estadisticas")
 async def get_stats(request: Request):
     user = await require_auth(request)
