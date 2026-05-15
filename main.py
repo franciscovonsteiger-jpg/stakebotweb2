@@ -1106,6 +1106,12 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 .tipo-row{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:var(--bg3);border-radius:var(--radius-sm);margin-bottom:8px;flex-wrap:wrap;gap:8px}
 .tipo-label{font-size:13px;font-weight:500}
 .tipo-stats{display:flex;gap:14px;font-size:12px;color:var(--text2);flex-wrap:wrap}
+/* Badges de confianza estadística (Fase 2.2) */
+.confianza-badge{display:inline-block;font-size:10px;padding:2px 6px;border-radius:4px;margin-left:4px;font-weight:500;letter-spacing:.3px;vertical-align:middle}
+.confianza-badge.minima{background:rgba(120,120,120,.18);color:#888;border:1px solid rgba(120,120,120,.3)}
+.confianza-badge.baja{background:rgba(239,68,68,.12);color:#ef4444;border:1px solid rgba(239,68,68,.3)}
+.confianza-badge.media{background:rgba(245,158,11,.12);color:#f59e0b;border:1px solid rgba(245,158,11,.3)}
+.confianza-badge.alta{background:rgba(20,184,166,.12);color:#14b8a6;border:1px solid rgba(20,184,166,.3)}
 .tipo-stats strong{color:var(--text)}
 .roi-bar-wrap{background:var(--border);border-radius:4px;height:5px;margin-top:8px}
 .roi-bar{height:5px;border-radius:4px}
@@ -1579,16 +1585,73 @@ function renderStats(stats, moneda='USD'){
     </div>
     <div class="card">
       <div class="card-title">🏆 Por deporte</div>
-      ${Object.entries(stats.por_deporte||{}).map(([d,s])=>renderTipoRow(d,s,'var(--text2)')).join('')||'<div style="color:var(--text2);font-size:13px;text-align:center;padding:20px">Sin datos</div>'}
+      ${renderDimensionRows(stats.por_deporte)}
     </div>
+  </div>
+
+  <!-- ── Dimensiones nuevas (Fase 2.2) ──────────────────────────────────── -->
+  <div class="two-col">
+    <div class="card">
+      <div class="card-title">🎯 Por mercado <span style="font-size:11px;color:var(--text3);font-weight:400">(Resultado, Over/Under, etc.)</span></div>
+      ${renderDimensionRows(stats.por_mercado)}
+    </div>
+    <div class="card">
+      <div class="card-title">📈 Por categoría <span style="font-size:11px;color:var(--text3);font-weight:400">(Sure / Gold / Value)</span></div>
+      ${renderDimensionRows(stats.por_categoria)}
+    </div>
+  </div>
+
+  <div class="two-col">
+    <div class="card">
+      <div class="card-title">🏟️ Por liga <span style="font-size:11px;color:var(--text3);font-weight:400">(detallado)</span></div>
+      ${renderDimensionRows(stats.por_liga, true)}
+    </div>
+    <div class="card">
+      <div class="card-title">💰 Por rango de cuota <span style="font-size:11px;color:var(--text3);font-weight:400">(¿dónde se gana más?)</span></div>
+      ${renderDimensionRows(stats.por_rango_cuota)}
+    </div>
+  </div>
+
+  <!-- Aviso pedagógico sobre confianza estadística -->
+  <div style="background:var(--bg3);border-radius:var(--radius-sm);padding:14px;margin-top:14px;font-size:12px;color:var(--text2);line-height:1.5">
+    <strong style="color:var(--text)">📊 Sobre las métricas:</strong>
+    Los badges junto a cada dimensión indican el tamaño de la muestra:
+    <span class="confianza-badge minima">⚠ &lt;5</span> azar puro,
+    <span class="confianza-badge baja">🔴 5–14</span> baja confianza,
+    <span class="confianza-badge media">🟡 15–29</span> tendencia visible,
+    <span class="confianza-badge alta">🟢 30+</span> representativa.
+    Con muestras chicas, un win rate alto puede ser suerte. Tomá decisiones cuando tengas
+    al menos 15 picks en una dimensión.
   </div>`;
+}
+
+function renderDimensionRows(obj, ordenarPorTotal){
+  if(!obj || Object.keys(obj).length===0)
+    return '<div style="color:var(--text2);font-size:13px;text-align:center;padding:20px">Sin datos</div>';
+  let entries = Object.entries(obj);
+  // Ordenar: por defecto por win rate desc, opcionalmente por total desc (para liga con muchas entradas)
+  if(ordenarPorTotal){
+    entries.sort((a,b) => (b[1].total||0) - (a[1].total||0));
+  } else {
+    entries.sort((a,b) => (b[1].win_rate||0) - (a[1].win_rate||0));
+  }
+  return entries.map(([d,s]) => renderTipoRow(d, s, 'var(--text2)')).join('');
 }
 
 function renderTipoRow(label,s,color){
   if(!s||s.total===0) return `<div class="tipo-row" style="opacity:.35"><div class="tipo-label" style="color:${color}">${label}</div><span style="font-size:12px;color:var(--text3)">Sin picks</span></div>`;
   const rc = s.roi>=0?'var(--teal)':'var(--red)';
+  // Badge de confianza estadística según tamaño de muestra (Fase 2.2)
+  // minima(<5)=gris, baja(5-14)=rojo, media(15-29)=ámbar, alta(30+)=verde
+  const confMap = {
+    'minima': {emoji:'⚠', label:'<5', cls:'minima'},
+    'baja':   {emoji:'🔴', label:'5-14', cls:'baja'},
+    'media':  {emoji:'🟡', label:'15-29', cls:'media'},
+    'alta':   {emoji:'🟢', label:'30+', cls:'alta'},
+  };
+  const conf = confMap[s.confianza] || confMap['minima'];
   return `<div class="tipo-row">
-    <div class="tipo-label" style="color:${color}">${label}</div>
+    <div class="tipo-label" style="color:${color}">${label} <span class="confianza-badge ${conf.cls}" title="Muestra: ${s.total} picks">${conf.emoji}</span></div>
     <div class="tipo-stats">
       <span>${s.total} picks</span>
       <span>Win: <strong>${fmt(s.win_rate,1)}%</strong></span>
