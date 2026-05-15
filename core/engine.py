@@ -727,28 +727,38 @@ def _analizar(ev, meta, market_key, es_vivo=False, oddspapi_eventos=None):
         else:
             ctx_señales = []
 
-        # Sure Pick — picks de alta confianza (≥75% prob modelo).
-        # Respeta el cap de cuota @2.50 (política conservadora del usuario).
-        # NO son "infalibles": en 100 picks a 75%, perdés 25. El stake usa Kelly.
-        if not es_vivo and p_mod >= MIN_SURE_PROB and not ctx.get("descartar") and 1.10 <= mejor <= ODDS_GOLD_MAX:
+        # Sure Pick — picks de alta confianza (≥80% prob modelo).
+        # Filtros adicionales:
+        #  - Respeta cap de cuota @2.50 (política conservadora)
+        #  - Solo próximas 24hs (cuotas más estables, info más reciente)
+        #  - Stake mínimo: si Kelly devuelve ~0, no es apostable (alta prob pero
+        #    cuota refleja bien la probabilidad → 0 edge real → no apostar).
+        #    Stake mínimo 0.5% del bankroll = ARS 4.700 sobre bankroll de ARS 940k.
+        # NO son "infalibles": en 100 picks a 80%, perdés 20. El stake usa Kelly.
+        if not es_vivo and p_mod >= MIN_SURE_PROB and not ctx.get("descartar") and 1.10 <= mejor <= ODDS_GOLD_MAX and 0 < horas <= 24:
             stake_s = kelly_stake(p_mod, mejor, KELLY_FRAC, 0.05)
-            gan_s   = round(stake_s * (mejor - 1), 2)
-            sure_picks.append(SurePick(
-                id=f"sure-{ev['id']}-{market_key}-{outcome_display}".replace(" ","_"),
-                tipo="sure", evento=f"{home} vs {away}",
-                deporte=meta["deporte"], liga=meta["nombre"],
-                mercado=mercado_lbl, equipo_pick=outcome_display,
-                odds_ref=mejor, prob_modelo=round(p_mod,4),
-                prob_pinnacle=round(p_pinn,4) if p_pinn else round(p_cons,4),
-                prob_consensus=round(p_cons,4),
-                confianza_pct=round(p_mod*100,1),
-                nivel_confianza=nivel_label(p_mod),
-                señales=señales_texto(p_pinn, p_cons, n_casas, horas, tiene_pinnacle),
-                stake_usd=stake_s, stake_pct=round(stake_s/BANKROLL*100,2),
-                ganancia_pot=gan_s, roi_pct=round(gan_s/BANKROLL*100,2),
-                contexto_id=ctx["id"], contexto_desc=ctx["descripcion"],
-                hora_local=hora_local, horas_para_inicio=round(horas,1),
-            ))
+            # Si Kelly da un stake despreciable (<0.5% del bankroll), el pick no
+            # vale la pena aunque la prob sea alta — la cuota ya refleja la
+            # probabilidad real (ej: Inter Milan @1.23 con prob 81%, edge ~0).
+            stake_min_pct = 0.005  # 0.5% del bankroll
+            if stake_s >= BANKROLL * stake_min_pct:
+                gan_s   = round(stake_s * (mejor - 1), 2)
+                sure_picks.append(SurePick(
+                    id=f"sure-{ev['id']}-{market_key}-{outcome_display}".replace(" ","_"),
+                    tipo="sure", evento=f"{home} vs {away}",
+                    deporte=meta["deporte"], liga=meta["nombre"],
+                    mercado=mercado_lbl, equipo_pick=outcome_display,
+                    odds_ref=mejor, prob_modelo=round(p_mod,4),
+                    prob_pinnacle=round(p_pinn,4) if p_pinn else round(p_cons,4),
+                    prob_consensus=round(p_cons,4),
+                    confianza_pct=round(p_mod*100,1),
+                    nivel_confianza=nivel_label(p_mod),
+                    señales=señales_texto(p_pinn, p_cons, n_casas, horas, tiene_pinnacle),
+                    stake_usd=stake_s, stake_pct=round(stake_s/BANKROLL*100,2),
+                    ganancia_pot=gan_s, roi_pct=round(gan_s/BANKROLL*100,2),
+                    contexto_id=ctx["id"], contexto_desc=ctx["descripcion"],
+                    hora_local=hora_local, horas_para_inicio=round(horas,1),
+                ))
 
         # Value Pick
         edge    = p_mod * mejor - 1
