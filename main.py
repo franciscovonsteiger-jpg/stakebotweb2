@@ -1161,7 +1161,14 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 
   <!-- Picks pendientes de resultado -->
   <div class="pendientes-section" id="pendientes-section" style="display:none">
-    <div class="section-title">⏳ Picks esperando resultado</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+      <div class="section-title" style="margin:0">⏳ Picks esperando resultado</div>
+      <button class="btn" id="btn-auto-resultados" onclick="autoResultados()"
+              style="background:linear-gradient(90deg,var(--blue),var(--violet));color:white;border:none">
+        🤖 Auto-completar resultados
+      </button>
+    </div>
+    <div id="auto-resultados-info" style="display:none;background:var(--bg3);border-radius:var(--radius-sm);padding:12px;margin-bottom:14px;font-size:13px;color:var(--text2)"></div>
     <div id="pendientes-lista"></div>
   </div>
 
@@ -1386,6 +1393,136 @@ async function marcarResultado(id, estado){
     alert('Error: '+(d.error||'desconocido'));
   }
 }
+
+// ─── Auto-resultados (Paso D — Fase 2) ────────────────────────────────────
+// Llama al endpoint que consulta The Odds API por scores reales y sugiere
+// W/L/Push para cada pick pendiente. NO marca automáticamente — solo agrega
+// un banner sugerido en cada card para que el usuario confirme manualmente.
+async function autoResultados(){
+  const btn = document.getElementById('btn-auto-resultados');
+  const info = document.getElementById('auto-resultados-info');
+  if(!btn) return;
+
+  // Estado loading
+  const txtOrig = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '⏳ Consultando scores...';
+  info.style.display = 'block';
+  info.innerHTML = '🔄 Buscando resultados de partidos cerrados en The Odds API...';
+
+  try {
+    const r = await aFetch('/api/picks/auto-resultados', {method:'POST'});
+    const d = await r.json();
+
+    if(!d.ok){
+      info.innerHTML = '❌ Error: '+(d.error||'desconocido');
+      info.style.color = 'var(--red)';
+      btn.disabled = false; btn.innerHTML = txtOrig;
+      return;
+    }
+
+    const sugs = d.sugerencias || [];
+
+    if(sugs.length === 0){
+      info.innerHTML = `ℹ️ ${d.mensaje || 'No hay picks evaluables todavía.'}<br>` +
+        `<span style="font-size:11px;color:var(--text3)">Recordá: el auto-tracking solo funciona con picks colocados ` +
+        `después de la actualización del 15/05/2026. Los picks anteriores los seguís marcando a mano.</span>`;
+      btn.disabled = false; btn.innerHTML = txtOrig;
+      return;
+    }
+
+    // Inyectar sugerencia en cada card de pick pendiente
+    let detectados = 0, indeterminados = 0;
+    sugs.forEach(s => {
+      const card = document.getElementById('pend-'+s.pick_db_id);
+      if(!card) return;
+
+      // Si ya hay un banner viejo, removerlo
+      const oldBanner = card.querySelector('.auto-sugerencia');
+      if(oldBanner) oldBanner.remove();
+
+      // Generar banner según resultado
+      let color, icono, texto, btnHTML;
+      const score = (s.score_home != null && s.score_away != null)
+        ? ` · Score: <strong>${s.score_home}-${s.score_away}</strong>` : '';
+
+      if(s.sugerido === 'ganado'){
+        color = 'var(--teal)'; icono = '✅'; texto = 'GANÓ';
+        btnHTML = `<button class="rbtn ganado" onclick="confirmarSugerencia(${s.pick_db_id},'ganado')" style="font-weight:600">✓ Confirmar GANÓ</button>`;
+        detectados++;
+      } else if(s.sugerido === 'perdido'){
+        color = 'var(--red)'; icono = '❌'; texto = 'PERDIÓ';
+        btnHTML = `<button class="rbtn perdido" onclick="confirmarSugerencia(${s.pick_db_id},'perdido')" style="font-weight:600">✗ Confirmar PERDIÓ</button>`;
+        detectados++;
+      } else if(s.sugerido === 'push'){
+        color = 'var(--amber)'; icono = '➖'; texto = 'PUSH (devuelve stake)';
+        btnHTML = `<button class="rbtn" onclick="confirmarSugerencia(${s.pick_db_id},'void')" style="color:var(--amber);border-color:var(--amber)">Confirmar PUSH</button>`;
+        detectados++;
+      } else {
+        color = 'var(--text3)'; icono = '❓'; texto = 'No se pudo determinar automáticamente';
+        btnHTML = '';
+        indeterminados++;
+      }
+
+      const banner = document.createElement('div');
+      banner.className = 'auto-sugerencia';
+      banner.style.cssText =
+        `background:var(--bg3);border-left:3px solid ${color};` +
+        `padding:10px 14px;border-radius:6px;margin:10px 0;font-size:13px`;
+      banner.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:${btnHTML?'8px':'0'}">
+          <div>
+            <div style="color:${color};font-weight:600">${icono} Sugerencia: ${texto}${score}</div>
+            <div style="font-size:11px;color:var(--text2);margin-top:3px">${s.razon||''}</div>
+          </div>
+          ${btnHTML}
+        </div>
+        ${s.sugerido !== 'indeterminado'
+          ? `<div style="font-size:10px;color:var(--text3)">💡 Si la cuota real o cash out fue distinto, completá los campos abajo antes de confirmar.</div>`
+          : ''}
+      `;
+
+      // Insertar el banner antes del resultado-form
+      const form = card.querySelector('.resultado-form');
+      if(form) card.insertBefore(banner, form);
+      else card.appendChild(banner);
+    });
+
+    // Resumen
+    info.innerHTML = `
+      <div style="color:var(--text)">
+        🔍 <strong>${sugs.length}</strong> pick(s) consultado(s) ·
+        <span style="color:var(--teal)">${detectados} con sugerencia</span> ·
+        <span style="color:var(--text3)">${indeterminados} sin resultado disponible</span>
+      </div>
+      ${detectados > 0
+        ? '<div style="font-size:11px;color:var(--text2);margin-top:6px">⬇ Revisá las sugerencias en cada pick y confirmá las correctas. Si la cuota real fue distinta, ajustala antes.</div>'
+        : ''}
+      ${d.errores && d.errores.length
+        ? '<div style="font-size:11px;color:var(--amber);margin-top:6px">⚠ Algunos sports fallaron: '+d.errores.join(', ')+'</div>'
+        : ''}
+    `;
+  } catch(e){
+    info.innerHTML = '❌ Error de red: '+e.message;
+    info.style.color = 'var(--red)';
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = txtOrig;
+  }
+}
+
+// Confirma una sugerencia: lee los inputs de cuota_real/stake_real/cashout
+// que ya están en la card y llama al endpoint resultado normal.
+async function confirmarSugerencia(id, estado){
+  // Si hay cuota de cashout marcada en el banner, lo dispara como cashout
+  // (esto pasa cuando el usuario completó el campo de cuota cashout manualmente)
+  const cashoutInput = document.getElementById('odds-cashout-'+id);
+  if(cashoutInput && parseFloat(cashoutInput.value) > 1.0){
+    estado = 'cashout';
+  }
+  await marcarResultado(id, estado);
+}
+
 
 function renderStats(stats, moneda='USD'){
   if(!stats||!stats.total_colocados) return '<div class="empty"><span class="empty-icon">📊</span>Sin datos aún.<br><span style="font-size:12px">Colocá picks desde el dashboard para ver tus estadísticas.</span></div>';
