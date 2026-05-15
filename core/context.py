@@ -6,9 +6,14 @@ log = logging.getLogger("stakebot.context")
 
 API_SPORTS_KEY = os.getenv("API_SPORTS_KEY", "")
 BASE = "https://v3.football.api-sports.io"
-BASE_TENNIS = "https://v1.tennis.api-sports.io"
-BASE_BASEBALL = "https://v2.baseball.api-sports.io"
-BASE_BASKETBALL = "https://v2.basketball.api-sports.io"
+# NOTA: API-Sports NO tiene endpoint dedicado de tenis. Lo verificamos en
+# la documentación oficial el 15/05/2026. El subdominio v1.tennis.api-sports.io
+# devuelve ERR_NAME_NOT_RESOLVED. Para tenis enriquecido necesitaríamos otra
+# API (ej: api-tennis.com, allsportsapi). Por ahora deshabilitado.
+BASE_TENNIS = None    # ← API no disponible
+BASE_BASEBALL = "https://v1.baseball.api-sports.io"  # ← corregido v2→v1
+BASE_BASKETBALL = "https://v1.basketball.api-sports.io"
+BASE_MMA = "https://v1.mma.api-sports.io"
 
 # ── MODO CONSERVADOR (Plan Free 100 req/día) ─────────────────────────────────
 # Cuando MODO_CONSERVADOR=true:
@@ -199,7 +204,9 @@ SURFACE_MAP = {
 }
 
 def get_stats_tenis(player_id: int, surface: str = None) -> dict:
-    """Stats de un tenista, opcionalmente filtradas por superficie."""
+    """Stats de un tenista. DISABLED: API-Sports no tiene endpoint de tenis."""
+    if not BASE_TENNIS:
+        return {}
     params = {"id": player_id}
     if surface: params["surface"] = surface
     data = _get(f"{BASE_TENNIS}/players/statistics", params)
@@ -214,7 +221,9 @@ def get_stats_tenis(player_id: int, surface: str = None) -> dict:
     }
 
 def get_h2h_tenis(p1_id: int, p2_id: int) -> dict:
-    """Head to head entre dos tenistas."""
+    """Head to head entre dos tenistas. DISABLED: API-Sports no tiene tenis."""
+    if not BASE_TENNIS:
+        return {}
     data = _get(f"{BASE_TENNIS}/players/headtohead", {"h2h": f"{p1_id}-{p2_id}"})
     if not data: return {}
     p1_wins = p2_wins = 0
@@ -229,7 +238,10 @@ def get_h2h_tenis(p1_id: int, p2_id: int) -> dict:
     }
 
 def get_ranking_tenis(player_name: str) -> Optional[int]:
-    """Obtiene el ranking ATP/WTA de un jugador."""
+    """Obtiene el ranking ATP/WTA de un jugador.
+    DISABLED: API-Sports no tiene endpoint de tenis."""
+    if not BASE_TENNIS:
+        return None
     data = _get(f"{BASE_TENNIS}/players", {"search": player_name})
     if not data: return None
     return data[0].get("ranking")
@@ -410,12 +422,29 @@ def enriquecer_evento(home: str, away: str, deporte: str, liga: str,
 
 
 def _enriquecer_tenis(home: str, away: str, liga: str) -> dict:
-    """Tenis: ranking + stats por superficie + h2h.
+    """Tenis: API-Sports NO tiene endpoint de tenis (verificado 15/05/2026).
+    Esta función queda como stub y retorna vacío sin gastar requests.
 
-    Consumo: ~4 requests por partido (con cache: ~0.5 amortizado).
-    Stats por superficie: clave para Roland Garros (clay) desde 24/05.
+    TODO Fase 2.3.D: integrar otra API (api-tennis.com, sportsdata.io, etc)
+    para tener stats por superficie + h2h + ranking real.
+
+    Por ahora, el resto del sistema sigue funcionando porque:
+    - El ranking de tenis ya estaba en código original con fallback graceful
+    - Los picks de tenis se siguen generando por The Odds API
+    - Solo perdemos las señales contextuales adicionales
+    """
+    return {"señales": []}
+
+
+def _enriquecer_tenis_OBSOLETO(home: str, away: str, liga: str) -> dict:
+    """OBSOLETO: este código asumía que existía v1.tennis.api-sports.io.
+    Lo dejamos comentado por si en el futuro API-Sports lanza tenis o
+    queremos migrar a otra API con interfaz similar.
     """
     ctx = {"señales": []}
+
+    if not BASE_TENNIS:  # API de tenis no disponible
+        return ctx
 
     # Detectar superficie según torneo
     liga_lower = (liga or "").lower()
@@ -446,7 +475,7 @@ def _enriquecer_tenis(home: str, away: str, liga: str) -> dict:
             ctx["señales"].append(f"✓ {away} mejor rankeado ({r2} vs {r1})")
 
     # Stats por superficie (solo si encontramos los IDs y hay superficie)
-    if superficie:
+    if superficie and BASE_TENNIS:
         # Reusamos la búsqueda de ranking para obtener el player_id
         p1_data = _get(f"{BASE_TENNIS}/players", {"search": home})
         p2_data = _get(f"{BASE_TENNIS}/players", {"search": away})
