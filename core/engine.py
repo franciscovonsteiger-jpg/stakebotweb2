@@ -1080,3 +1080,237 @@ def escanear_mercado(bankroll_usuario: float = None) -> dict:
         "bankroll":           BANKROLL,
         "oddspapi_quota":     _oddspapi_quota_status() if ODDSPAPI_KEY else None,
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AUTO-TRACKING DE RESULTADOS (Fase 2)
+# ══════════════════════════════════════════════════════════════════════════════
+# Funciones para consultar scores reales de The Odds API y evaluar W/L de cada
+# pick pendiente. La idea: el endpoint del backend llama a `consultar_scores()`
+# una vez por sport_key necesario, después `evaluar_resultado()` por cada pick.
+# El sistema NO marca automáticamente — solo sugiere para confirmación manual.
+
+# Cache de scores para no llamar varias veces a la API en el mismo minuto.
+_scores_cache = {}  # key: sport_key, value: {"ts": timestamp, "data": [...]}
+SCORES_CACHE_TTL = 600  # 10 minutos
+
+
+def consultar_scores(sport_key: str) -> list:
+    """Consulta el endpoint /scores de The Odds API para un sport_key.
+
+    Returns: lista de partidos con estructura:
+      [{"id": "...", "home_team": "...", "away_team": "...",
+        "commence_time": "...", "completed": bool,
+        "scores": [{"name": "Home", "score": "2"}, {"name": "Away", "score": "1"}]}]
+
+    NOTA: cuesta 2 requests por llamada (vs 1 del /odds). The Odds API cobra
+    eso. Por eso usamos cache de 10 minutos.
+
+    Sports soportados con scores: NBA, NHL, MLB, NFL, EPL, La Liga, Bundesliga,
+    Serie A, Ligue 1, Champions, otros principales. Tenis y MMA tienen
+    cobertura limitada — puede devolver el partido pero sin "scores" detallados.
+    """
+    if not API_KEY:
+        log.warning("consultar_scores: API_KEY no configurada")
+        return []
+
+    # Cache hit
+    cached = _scores_cache.get(sport_key)
+    if cached and (time.time() - cached["ts"]) < SCORES_CACHE_TTL:
+        return cached["data"]
+
+    try:
+        url = f"{BASE_URL}/sports/{sport_key}/scores/"
+        r = requests.get(url, params={
+            "apiKey": API_KEY,
+            "daysFrom": 3,  # Hasta 3 días atrás (máximo permitido por la API)
+            "dateFormat": "iso",
+        }, timeout=20)
+
+        if r.status_code == 422:
+            log.warning(f"consultar_scores {sport_key}: 422 — sport no soporta scores o key inválido")
+            return []
+        if r.status_code == 401:
+            log.error(f"consultar_scores {sport_key}: 401 — API key inválida")
+            return []
+        r.raise_for_status()
+
+        data = r.json() or []
+        # Solo nos interesan partidos completados
+        completados = [g for g in data if g.get("completed")]
+        _scores_cache[sport_key] = {"ts": time.time(), "data": completados}
+        remaining = r.headers.get("x-requests-remaining", "?")
+        log.info(f"Scores {sport_key}: {len(completados)} partidos completados · {remaining} req restantes")
+        return completados
+    except Exception as e:
+        log.error(f"consultar_scores {sport_key}: {e}")
+        return []
+
+
+def _parse_score(s) -> Optional[int]:
+    """Convierte score (puede ser str o int o None) a int o None."""
+    if s is None:
+        return None
+    try:
+        return int(str(s).strip())
+    except (ValueError, TypeError):
+        return None
+
+
+def evaluar_resultado(pick: dict, score_data: dict) -> dict:
+    """Evalúa si un pick GANÓ, PERDIÓ, fue PUSH o no se puede determinar.
+
+    Args:
+        pick: dict con campos del pick (mercado, equipo_pick, punto_handicap,
+              punto_total, evento, etc.)
+        score_data: partido de The Odds API con scores
+
+    Returns:
+        {
+            "sugerido": "ganado" | "perdido" | "push" | "indeterminado",
+            "score_home": int | None,
+            "score_away": int | None,
+            "razon": "explicación de la evaluación"
+        }
+    """
+    res = {"sugerido": "indeterminado", "score_home": None, "score_away": None, "razon": ""}
+
+    if not score_data or not score_data.get("completed"):
+        res["razon"] = "Partido no completado en la API"
+        return res
+
+    # Extraer scores
+    scores_list = score_data.get("scores") or []
+    if not scores_list or len(scores_list) < 2:
+        res["razon"] = "API no devolvió scores detallados"
+        return res
+
+    home_team = score_data.get("home_team", "")
+    away_team = score_data.get("away_team", "")
+
+    score_home_raw = next((s.get("score") for s in scores_list if s.get("name") == home_team), None)
+    score_away_raw = next((s.get("score") for s in scores_list if s.get("name") == away_team), None)
+    score_home = _parse_score(score_home_raw)
+    score_away = _parse_score(score_away_raw)
+
+    if score_home is None or score_away is None:
+        res["razon"] = f"Scores no numéricos: home={score_home_raw}, away={score_away_raw}"
+        return res
+
+    res["score_home"] = score_home
+    res["score_away"] = score_away
+
+    mercado     = (pick.get("mercado") or "").lower()
+    equipo_pick = (pick.get("equipo_pick") or "").strip()
+    punto_hand  = pick.get("punto_handicap")
+    punto_tot   = pick.get("punto_total")
+
+    # ── Mercado h2h (Resultado 1X2) ────────────────────────────────────────────
+    if "resultado" in mercado or "h2h" in mercado or mercado == "":
+        if score_home > score_away:
+            ganador = home_team
+        elif score_away > score_home:
+            ganador = away_team
+        else:
+            ganador = "Draw"
+
+        if _equipo_match(equipo_pick, ganador):
+            res["sugerido"] = "ganado"
+            res["razon"] = f"{ganador} ganó {score_home}-{score_away}"
+        elif equipo_pick.lower() in ("draw", "empate") and ganador == "Draw":
+            res["sugerido"] = "ganado"
+            res["razon"] = f"Empate {score_home}-{score_away}"
+        else:
+            res["sugerido"] = "perdido"
+            res["razon"] = f"Pick: {equipo_pick} · Resultado: {ganador} ({score_home}-{score_away})"
+        return res
+
+    # ── Mercado totals (Over/Under) ────────────────────────────────────────────
+    if "over/under" in mercado or "totals" in mercado:
+        if punto_tot is None:
+            res["razon"] = "No hay punto_total guardado"
+            return res
+
+        total_real = score_home + score_away
+        es_over = equipo_pick.lower().startswith("over")
+        es_under = equipo_pick.lower().startswith("under")
+
+        if not (es_over or es_under):
+            res["razon"] = f"equipo_pick no es Over/Under: {equipo_pick}"
+            return res
+
+        if total_real == punto_tot:
+            res["sugerido"] = "push"
+            res["razon"] = f"Total exacto = línea ({punto_tot}) · push"
+        elif (es_over and total_real > punto_tot) or (es_under and total_real < punto_tot):
+            res["sugerido"] = "ganado"
+            res["razon"] = f"{equipo_pick}: total real {total_real} vs línea {punto_tot}"
+        else:
+            res["sugerido"] = "perdido"
+            res["razon"] = f"{equipo_pick}: total real {total_real} vs línea {punto_tot}"
+        return res
+
+    # ── Mercado spreads (Hándicap) ─────────────────────────────────────────────
+    if "hándicap" in mercado or "handicap" in mercado or "spreads" in mercado:
+        if punto_hand is None:
+            res["razon"] = "No hay punto_handicap guardado"
+            return res
+
+        # equipo_pick formato: "Liverpool (+1.5)" o "Manchester United (-2.0)"
+        # Necesitamos identificar el equipo apostado y aplicar el handicap
+        equipo_base = equipo_pick.split("(")[0].strip()
+        es_home = _equipo_match(equipo_base, home_team)
+        es_away = _equipo_match(equipo_base, away_team)
+
+        if not (es_home or es_away):
+            res["razon"] = f"No matchea equipo: pick={equipo_base} vs home={home_team}/away={away_team}"
+            return res
+
+        # Aplicar handicap al equipo apostado
+        if es_home:
+            score_apostado_ajustado = score_home + punto_hand
+            score_rival = score_away
+        else:
+            score_apostado_ajustado = score_away + punto_hand
+            score_rival = score_home
+
+        if score_apostado_ajustado > score_rival:
+            res["sugerido"] = "ganado"
+            res["razon"] = f"{equipo_base} ({punto_hand:+.1f}): {score_apostado_ajustado} > {score_rival}"
+        elif score_apostado_ajustado < score_rival:
+            res["sugerido"] = "perdido"
+            res["razon"] = f"{equipo_base} ({punto_hand:+.1f}): {score_apostado_ajustado} < {score_rival}"
+        else:
+            res["sugerido"] = "push"
+            res["razon"] = f"{equipo_base} ({punto_hand:+.1f}): empate técnico"
+        return res
+
+    # ── Mercado ambos anotan (btts) ────────────────────────────────────────────
+    if "ambos" in mercado or "btts" in mercado:
+        ambos_anotan = score_home > 0 and score_away > 0
+        es_si = equipo_pick.lower() in ("yes", "sí", "si")
+        es_no = equipo_pick.lower() == "no"
+        if es_si:
+            res["sugerido"] = "ganado" if ambos_anotan else "perdido"
+        elif es_no:
+            res["sugerido"] = "ganado" if not ambos_anotan else "perdido"
+        else:
+            res["razon"] = f"equipo_pick no reconocido para btts: {equipo_pick}"
+            return res
+        res["razon"] = f"Ambos anotan={ambos_anotan} · pick={equipo_pick}"
+        return res
+
+    res["razon"] = f"Mercado no soportado para auto-evaluación: {mercado}"
+    return res
+
+
+def _equipo_match(pick_team: str, real_team: str) -> bool:
+    """Compara dos nombres de equipo permitiendo variaciones menores.
+
+    Reusa la normalización ya implementada para OddsPapi.
+    """
+    if not pick_team or not real_team:
+        return False
+    a = _normalize_name(pick_team)
+    b = _normalize_name(real_team)
+    return a == b or a in b or b in a
