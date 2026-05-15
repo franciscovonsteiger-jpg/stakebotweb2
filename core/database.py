@@ -514,19 +514,71 @@ async def get_estadisticas(user_id: int) -> dict:
             win_rate = round(len(ganados) / len(resueltos) * 100, 1) if resueltos else 0
 
             def tipo_stats(lista):
-                if not lista: return {"total":0,"ganados":0,"win_rate":0,"pnl":0,"roi":0}
+                if not lista: return {"total":0,"ganados":0,"win_rate":0,"pnl":0,"roi":0,"confianza":"baja"}
                 g   = [p for p in lista if p["estado"] in ("ganado","cashout")]
                 pnl = sum((p["pnl"] or 0) * (bk / float(p.get("bankroll_engine") or p.get("bankroll_antes") or bk or 1)) for p in lista)
                 inv = sum(stake_real(p, bk) for p in lista)
-                return {"total":len(lista),"ganados":len(g),
-                        "win_rate":round(len(g)/len(lista)*100,1),
+                # Confianza estadística según tamaño de muestra:
+                #  - <5 picks: muestra muy chica, win rate puede ser azar puro
+                #  - 5-14 picks: baja confianza, indicativo pero no concluyente
+                #  - 15-29 picks: media, ya se ve una tendencia
+                #  - 30+ picks: alta, estadísticamente representativo
+                n = len(lista)
+                if n < 5:       confianza = "minima"
+                elif n < 15:    confianza = "baja"
+                elif n < 30:    confianza = "media"
+                else:           confianza = "alta"
+                return {"total":n,"ganados":len(g),
+                        "win_rate":round(len(g)/n*100,1),
                         "pnl":round(pnl,2),
-                        "roi":round(pnl/inv*100,2) if inv>0 else 0}
+                        "roi":round(pnl/inv*100,2) if inv>0 else 0,
+                        "confianza":confianza}
 
-            dep_stats = {}
+            # ── Agrupaciones por dimensión (Fase 2.2) ──────────────────────────
+            # por_deporte, por_liga, por_mercado: dimensiones categóricas
+            # por_rango_cuota, por_rango_edge: dimensiones numéricas en buckets
+            dep_stats, liga_stats, mer_stats, cat_stats = {}, {}, {}, {}
+            cuota_buckets, edge_buckets = {}, {}
+
+            def bucket_cuota(odds: float) -> str:
+                """Bucket de cuota para análisis: identificar dónde se gana más."""
+                if odds <= 0:        return "—"
+                if odds < 1.50:      return "@1.20–1.49"
+                if odds < 1.80:      return "@1.50–1.79"
+                if odds < 2.10:      return "@1.80–2.09"
+                if odds < 2.50:      return "@2.10–2.49"
+                return "@2.50+"
+
+            def bucket_edge(edge_pct: float) -> str:
+                """Bucket de edge para análisis: ¿edges altos ganan más?"""
+                if edge_pct <= 0:    return "—"
+                if edge_pct < 5:     return "0–4.9%"
+                if edge_pct < 8:     return "5–7.9%"
+                if edge_pct < 12:    return "8–11.9%"
+                return "12%+"
+
             for p in resueltos:
+                # Deporte
                 d = p["deporte"] or "Otro"
                 dep_stats.setdefault(d, []).append(p)
+                # Liga (ej: "ATP Roma", "NBA", "Serie A")
+                lg = p["liga"] or "—"
+                liga_stats.setdefault(lg, []).append(p)
+                # Mercado (Resultado 1X2, Over/Under, Hándicap, etc)
+                m = p["mercado"] or "—"
+                mer_stats.setdefault(m, []).append(p)
+                # Categoría: seguro / alto_valor / sure / value normal
+                # El campo "tipo" + "es_gold" + cuota nos dan la categoría
+                odds_ref = float(p.get("odds_ref") or 0)
+                if p.get("tipo") == "sure":
+                    cat = "Sure Bet"
+                elif p.get("es_gold"):
+                    cat = "Gold (seguro)" if odds_ref <= 2.10 else "Gold (alto valor)"
+                else:
+                    cat = "Value normal"
+                cat_stats.setdefault(cat, []).append(p)
+                # Rango de cuota
+                cuota_buckets.setdefault(bucket_cuota(odds_ref), []).append(p)
 
             return {
                 "total_colocados":  len(picks),
@@ -545,7 +597,14 @@ async def get_estadisticas(user_id: int) -> dict:
                 "value_stats":      tipo_stats([p for p in resueltos if p["tipo"]=="value" and not p["es_gold"]]),
                 "sure_stats":       tipo_stats([p for p in resueltos if p["tipo"]=="sure"]),
                 "gold_stats":       tipo_stats([p for p in resueltos if p["es_gold"]]),
+                # ── Dimensiones (Fase 2.2) ────────────────────────────────────
+                # Cada dimensión incluye "confianza" para que el frontend
+                # muestre badge según tamaño de muestra (mínima/baja/media/alta).
                 "por_deporte":      {d: tipo_stats(v) for d,v in dep_stats.items()},
+                "por_liga":         {l: tipo_stats(v) for l,v in liga_stats.items()},
+                "por_mercado":      {m: tipo_stats(v) for m,v in mer_stats.items()},
+                "por_categoria":    {c: tipo_stats(v) for c,v in cat_stats.items()},
+                "por_rango_cuota":  {b: tipo_stats(v) for b,v in cuota_buckets.items()},
             }
 
         bankroll_actual = float(user["bankroll"]) if user else 1000
