@@ -307,12 +307,34 @@ async def guardar_pick(user_id: int, pick: dict) -> dict:
         try:
             # El pick ya viene con stake calculado sobre el bankroll del usuario
             # Guardamos bankroll_engine para referencia histórica exacta
+            # ── Campos nuevos para auto-tracking (Fase 2) ──────────────────────
+            # event_id + sport_key + commence_time permiten luego consultar el
+            # endpoint /scores de The Odds API y matchear el resultado.
+            # punto_handicap / punto_total guardan la línea apostada para
+            # evaluar W/L en spreads y totals.
+            event_id_val      = pick.get("event_id") or None
+            sport_key_val     = pick.get("sport_key") or None
+            commence_time_raw = pick.get("commence_time") or None
+            commence_time_val = None
+            if commence_time_raw:
+                try:
+                    # Parsear ISO 8601 con Z → datetime con tz
+                    from datetime import datetime as _dt
+                    commence_time_val = _dt.fromisoformat(commence_time_raw.replace("Z", "+00:00"))
+                except Exception:
+                    commence_time_val = None
+            punto_handicap_val = pick.get("punto_handicap")
+            punto_total_val    = pick.get("punto_total")
+
             result = await conn.execute("""
                 INSERT INTO historial_picks
                     (usuario_id, pick_id, evento, liga, deporte, mercado,
                      equipo_pick, odds_ref, stake_usd, tipo, es_gold, estado,
-                     bankroll_antes, bankroll_despues, bankroll_engine)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pendiente',$12,$13,$14)
+                     bankroll_antes, bankroll_despues, bankroll_engine,
+                     event_id, sport_key, commence_time,
+                     punto_handicap, punto_total)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pendiente',$12,$13,$14,
+                        $15,$16,$17,$18,$19)
                 ON CONFLICT (usuario_id, pick_id) DO UPDATE
                 SET estado = EXCLUDED.estado
             """,
@@ -330,6 +352,11 @@ async def guardar_pick(user_id: int, pick: dict) -> dict:
                 bankroll_antes,
                 bankroll_despues,
                 bankroll_engine_pick,  # bankroll usado para calcular el stake
+                event_id_val,
+                sport_key_val,
+                commence_time_val,
+                punto_handicap_val,
+                punto_total_val,
             )
             # Solo descontar si se insertó (no era duplicado)
             if result == "INSERT 0 1":
