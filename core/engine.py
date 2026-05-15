@@ -353,13 +353,16 @@ def nivel_label(prob: float) -> str:
     if prob >= 0.89: return "MUY ALTA"
     return "ALTA"
 
-def señales_texto(p_pinn, p_cons, n_casas, horas, tiene_pinnacle) -> str:
+def señales_texto(p_pinn, p_cons, n_casas, horas, tiene_pinnacle, ctx_señales: list = None) -> str:
     s = []
     if tiene_pinnacle and p_pinn:
         s.append(f"✓ Pinnacle confirma {p_pinn*100:.0f}%")
     if n_casas >= 8: s.append(f"{n_casas} casas cubren el evento")
     if 0 < horas <= 6: s.append("Menos de 6hs — odds estables")
     if p_pinn and abs(p_pinn - p_cons) < 0.03: s.append("Consensus concentrado")
+    # Agregar señales del contexto API-Sports (forma, h2h, lesiones, pitcher, etc.)
+    if ctx_señales:
+        s.extend(ctx_señales[:3])  # máximo 3 señales de contexto para no saturar
     return " · ".join(s) if s else f"Consensus de {n_casas} casas"
 
 def kelly_stake(prob, odds, kf=None, maxp=None) -> float:
@@ -701,8 +704,10 @@ def _analizar(ev, meta, market_key, es_vivo=False, oddspapi_eventos=None):
     min_edge_ok = MIN_EDGE_VIVO if es_vivo else MIN_EDGE
     tiene_pinnacle = any(b.get("key") == "pinnacle" for b in bookmakers)
 
-    # Enriquecer con contexto real (API-Sports)
-    ctx_deportivo = enriquecer_evento(home, away, meta["deporte"], meta["nombre"])
+    # Enriquecer con contexto real (API-Sports). Pasamos horas para que el
+    # context.py decida si vale la pena consultar la API (modo conservador
+    # skipea partidos lejanos para ahorrar quota).
+    ctx_deportivo = enriquecer_evento(home, away, meta["deporte"], meta["nombre"], horas)
 
     # Filtros críticos por deporte
     # Tenis con diferencia extrema de ranking: solo descartar h2h, permitir mercados alternativos
@@ -714,14 +719,15 @@ def _analizar(ev, meta, market_key, es_vivo=False, oddspapi_eventos=None):
         log.info(f"Esports descartado — equipos desconocidos: {home} vs {away}")
         return [], []
 
-    # Béisbol h2h: bloqueado hasta activar pitcher data en context.py.
-    # En MLB, el pitcher abridor determina ~60-70% del resultado. Sin esa info,
-    # el modelo está ciego y genera picks de pérdida esperada (causa principal
-    # del -19% del día 2). Permitimos totals/spreads cuando los habilitemos,
-    # pero NO h2h hasta tener pitcher data.
+    # Béisbol h2h: hasta antes de Fase 2.3 estaba bloqueado por falta de info
+    # del pitcher abridor. Ahora lo permitimos SI el contexto trae pitcher_data.
+    # Si no tenemos pitcher info, sigue bloqueado (mismo comportamiento que antes).
     if meta.get("tipo") == "baseball" and market_key == "h2h":
-        log.debug(f"MLB h2h bloqueado por falta de pitcher data: {home} vs {away}")
-        return [], []
+        if not ctx_deportivo.get("tiene_pitcher_data"):
+            log.debug(f"MLB h2h bloqueado por falta de pitcher data: {home} vs {away}")
+            return [], []
+        else:
+            log.debug(f"MLB h2h permitido: {home} vs {away} (pitcher data OK)")
 
     outcomes_set = set()
     outcomes_map = {}        # original → display string ("Under 217.5")
@@ -768,9 +774,23 @@ def _analizar(ev, meta, market_key, es_vivo=False, oddspapi_eventos=None):
         sport_key_val     = meta.get("sport_key", "")
         commence_time_val = commence  # ISO 8601 UTC desde The Odds API
 
-        # Ajustar con contexto deportivo real
+        # Ajustar con contexto deportivo real.
+        # Determinamos si el equipo apostado es el "home" del partido — esto
+        # permite al ajustador saber si forma/h2h/etc favorecen al apostado.
+        # Para mercados Over/Under no aplica (pasamos None).
+        apostado_es_home = None
+        if market_key == "h2h":
+            outcome_lower = (outcome_name or "").lower()
+            if outcome_lower and outcome_lower not in ("draw", "empate"):
+                apostado_es_home = _equipo_match(outcome_name, home)
+        elif market_key == "spreads":
+            # En spreads el equipo apostado está en outcome_name (sin el handicap)
+            equipo_base = outcome_name.split("(")[0].strip() if outcome_name else ""
+            if equipo_base:
+                apostado_es_home = _equipo_match(equipo_base, home)
+
         if ctx_deportivo:
-            p_mod, ctx_señales = ajustar_prob_con_contexto(p_mod, ctx_deportivo)
+            p_mod, ctx_señales = ajustar_prob_con_contexto(p_mod, ctx_deportivo, apostado_es_home)
         else:
             ctx_señales = []
 
@@ -800,7 +820,7 @@ def _analizar(ev, meta, market_key, es_vivo=False, oddspapi_eventos=None):
                     prob_consensus=round(p_cons,4),
                     confianza_pct=round(p_mod*100,1),
                     nivel_confianza=nivel_label(p_mod),
-                    señales=señales_texto(p_pinn, p_cons, n_casas, horas, tiene_pinnacle),
+                    señales=señales_texto(p_pinn, p_cons, n_casas, horas, tiene_pinnacle, ctx_señales),
                     stake_usd=stake_s, stake_pct=round(stake_s/BANKROLL*100,2),
                     ganancia_pot=gan_s, roi_pct=round(gan_s/BANKROLL*100,2),
                     contexto_id=ctx["id"], contexto_desc=ctx["descripcion"],
@@ -1063,6 +1083,18 @@ def escanear_mercado(bankroll_usuario: float = None) -> dict:
         log.info(f"OddsPapi quota: {quota['requests_consumidos_mes']}/250 req/mes · cache: {quota['cache_entries']} torneos" +
                  (f" · último error: {quota['ultimo_error']}" if quota['ultimo_error'] else ""))
 
+    # Status de quota API-Sports (Fase 2.3)
+    api_sports_quota = None
+    try:
+        from core.context import quota_status as _api_sports_quota_status
+        api_sports_quota = _api_sports_quota_status()
+        log.info(f"API-Sports ({api_sports_quota['modo']}): {api_sports_quota['requests_hoy']}/{api_sports_quota['limite_soft']} req/día · "
+                 f"cache hits/miss {api_sports_quota['cache_hits']}/{api_sports_quota['cache_miss']}" +
+                 (f" · cortado por límite" if api_sports_quota['cortado'] else "") +
+                 (f" · error: {api_sports_quota['ultimo_error']}" if api_sports_quota['ultimo_error'] else ""))
+    except Exception as e:
+        log.debug(f"No se pudo obtener quota API-Sports: {e}")
+
     return {
         "timestamp":          datetime.now().isoformat(),
         "total_eventos":      total,
@@ -1079,6 +1111,7 @@ def escanear_mercado(bankroll_usuario: float = None) -> dict:
         "en_curso":           en_curso[:20],
         "bankroll":           BANKROLL,
         "oddspapi_quota":     _oddspapi_quota_status() if ODDSPAPI_KEY else None,
+        "api_sports_quota":   api_sports_quota,
     }
 
 
