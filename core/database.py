@@ -752,6 +752,62 @@ async def eliminar_pick(pick_db_id: int, user_id: int) -> dict:
         )
         return {"ok": True, "bankroll_nuevo": nuevo_bankroll}
 
+# ── Auto-tracking de resultados (Fase 2) ──────────────────────────────────────
+
+async def get_picks_pendientes_para_evaluar(user_id: int, margen_minutos: int = 180) -> list:
+    """Lista picks pendientes cuyo partido YA terminó (commence_time + margen pasó).
+
+    El margen permite que el partido haya terminado realmente. Para deportes:
+    - Fútbol: ~110 min (90 + descuentos + entretiempo)
+    - Tenis: variable, mejor ~3hs por defecto
+    - NBA/NHL: ~2.5hs
+    - MMA: variable, ~3hs por defecto
+    - MLB: ~3.5hs
+
+    Usamos 180 min (3hs) como default seguro para todos los deportes.
+
+    Solo devuelve picks que tienen event_id + sport_key (los colocados después
+    del Paso B). Picks viejos sin esos campos quedan fuera del auto-tracking.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT id, pick_id, evento, deporte, liga, mercado, equipo_pick,
+                   odds_ref, stake_usd, event_id, sport_key, commence_time,
+                   punto_handicap, punto_total, fecha_colocado
+            FROM historial_picks
+            WHERE usuario_id = $1
+              AND estado = 'pendiente'
+              AND event_id IS NOT NULL
+              AND sport_key IS NOT NULL
+              AND commence_time IS NOT NULL
+              AND commence_time + ($2 * INTERVAL '1 minute') < NOW()
+            ORDER BY commence_time ASC
+        """, user_id, margen_minutos)
+        return [dict(r) for r in rows]
+
+
+async def guardar_resultado_sugerido(pick_db_id: int, user_id: int,
+                                      resultado_sugerido: str,
+                                      score_home: Optional[int],
+                                      score_away: Optional[int]) -> dict:
+    """Guarda la sugerencia automática sin cambiar el estado del pick.
+
+    El pick sigue como 'pendiente' hasta que el usuario confirme manualmente.
+    Esto nos permite mostrar "el sistema dice GANÓ, ¿confirmás?" en la UI.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            UPDATE historial_picks
+            SET resultado_sugerido = $1,
+                resultado_evento_home = $2,
+                resultado_evento_away = $3
+            WHERE id = $4 AND usuario_id = $5
+        """, resultado_sugerido, score_home, score_away, pick_db_id, user_id)
+        return {"ok": True}
+
+
 # ── Vencimientos ──────────────────────────────────────────────────────────────
 
 async def activar_trial(user_id: int) -> dict:
