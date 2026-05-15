@@ -75,6 +75,15 @@ async def init_db():
                 bankroll_despues FLOAT,
                 fecha_colocado TIMESTAMPTZ DEFAULT NOW(),
                 fecha_resultado TIMESTAMPTZ,
+                -- Campos para auto-tracking de resultados (Fase 2)
+                event_id TEXT,
+                sport_key TEXT,
+                commence_time TIMESTAMPTZ,
+                punto_handicap FLOAT,
+                punto_total FLOAT,
+                resultado_sugerido TEXT,
+                resultado_evento_home INTEGER,
+                resultado_evento_away INTEGER,
                 UNIQUE(usuario_id, pick_id)
             );
             CREATE TABLE IF NOT EXISTS bankroll_historial (
@@ -107,6 +116,23 @@ async def init_db():
             "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS liga TEXT",
             "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS tipo TEXT DEFAULT 'value'",
             "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS es_gold BOOLEAN DEFAULT FALSE",
+            # ── Auto-tracking de resultados (Fase 2 — Paso A) ─────────────
+            # event_id + sport_key: identificadores de The Odds API para
+            # poder matchear automáticamente con el endpoint /scores.
+            # commence_time: hora de inicio del partido (para saber cuándo
+            # ya terminó y consultar resultado).
+            # punto_handicap / punto_total: cuando el mercado es spreads u
+            # over/under, guarda el número de la línea apostada (ej +4.0
+            # games, Under 217.5 pts) para poder evaluar W/L automáticamente.
+            "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS event_id TEXT",
+            "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS sport_key TEXT",
+            "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS commence_time TIMESTAMPTZ",
+            "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS punto_handicap FLOAT",
+            "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS punto_total FLOAT",
+            "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS resultado_sugerido TEXT",  # ganado/perdido/push/null
+            "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS resultado_evento_home INTEGER",  # score home
+            "ALTER TABLE historial_picks ADD COLUMN IF NOT EXISTS resultado_evento_away INTEGER",  # score away
+            "CREATE INDEX IF NOT EXISTS idx_historial_picks_pendientes ON historial_picks(estado, commence_time) WHERE estado = 'pendiente'",
             "CREATE TABLE IF NOT EXISTS bankroll_historial (id SERIAL PRIMARY KEY, usuario_id INTEGER REFERENCES usuarios(id), monto FLOAT NOT NULL, tipo TEXT NOT NULL, descripcion TEXT, fecha TIMESTAMPTZ DEFAULT NOW())",
             "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS fecha_vencimiento TIMESTAMPTZ",
             "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS trial_usado BOOLEAN DEFAULT FALSE",
