@@ -199,6 +199,16 @@ class ValuePick:
     contexto_id: str; contexto_desc: str
     descartado: bool; razon_descarte: Optional[str]
     hora_local: Optional[str]; horas_para_inicio: float
+    # ── Campos para auto-tracking de resultados (Fase 2) ──────────────────────
+    # event_id + sport_key permiten matchear con The Odds API /scores endpoint.
+    # commence_time se usa para saber cuándo el partido ya terminó.
+    # punto_handicap / punto_total: la línea apostada (ej +4.0, 217.5) para
+    # evaluar W/L cuando llegue el resultado.
+    event_id: str = ""
+    sport_key: str = ""
+    commence_time: str = ""           # ISO 8601 UTC, viene de The Odds API
+    punto_handicap: Optional[float] = None  # Para mercado spreads
+    punto_total: Optional[float] = None     # Para mercado totals (Over/Under)
 
 @dataclass
 class SurePick:
@@ -209,6 +219,12 @@ class SurePick:
     stake_usd: float; stake_pct: float; ganancia_pot: float; roi_pct: float
     contexto_id: str; contexto_desc: str
     hora_local: Optional[str]; horas_para_inicio: float
+    # ── Campos para auto-tracking de resultados (Fase 2) ──────────────────────
+    event_id: str = ""
+    sport_key: str = ""
+    commence_time: str = ""
+    punto_handicap: Optional[float] = None
+    punto_total: Optional[float] = None
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -382,6 +398,23 @@ def enriquecer_outcome(outcome_name, mkt_outcomes) -> str:
                 elif outcome_name not in ("Yes", "No"):
                     return f"{outcome_name} ({punto:+.1f})" if punto != 0 else outcome_name
     return outcome_name
+
+def extraer_punto(outcome_name, mkt_outcomes) -> Optional[float]:
+    """Extrae el valor numérico de la línea apostada (handicap/total).
+    Útil para auto-tracking de resultados:
+      - Si Pick es "Under 217.5" → retorna 217.5 (lo guardamos en punto_total)
+      - Si Pick es "Landaluce (+4.0)" → retorna 4.0 (lo guardamos en punto_handicap)
+      - Si es h2h (Resultado 1X2) → retorna None
+    """
+    for o in mkt_outcomes:
+        if o.get("name") == outcome_name:
+            punto = o.get("point") or o.get("handicap")
+            if punto is not None:
+                try:
+                    return float(punto)
+                except (ValueError, TypeError):
+                    return None
+    return None
 
 # ── OddsPapi integration ───────────────────────────────────────────────────────
 # API correcta: https://api.oddspapi.io/v4/
@@ -691,15 +724,19 @@ def _analizar(ev, meta, market_key, es_vivo=False, oddspapi_eventos=None):
         return [], []
 
     outcomes_set = set()
-    outcomes_map = {}  # original → display
+    outcomes_map = {}        # original → display string ("Under 217.5")
+    outcomes_punto = {}      # original → punto numérico (217.5) para auto-tracking
     for bm in bookmakers:
         for mkt in bm.get("markets", []):
             if mkt["key"] == market_key:
                 for out in mkt["outcomes"]:
                     nombre_orig = out["name"]
                     nombre_rico = enriquecer_outcome(nombre_orig, mkt["outcomes"])
+                    punto_num   = extraer_punto(nombre_orig, mkt["outcomes"])
                     outcomes_set.add(nombre_orig)
                     outcomes_map[nombre_orig] = nombre_rico
+                    if punto_num is not None:
+                        outcomes_punto[nombre_orig] = punto_num
 
     for outcome_name in outcomes_set:
         outcome_display = outcomes_map.get(outcome_name, outcome_name)
@@ -720,6 +757,16 @@ def _analizar(ev, meta, market_key, es_vivo=False, oddspapi_eventos=None):
         ctx    = detect_context(outcome_name, meta["deporte"])
         penali = ctx.get("penalizacion", 0.0)
         p_mod  = calc_modelo_prob(p_pinn, p_cons, penali, n_casas)
+
+        # ── Datos para auto-tracking (Fase 2) ─────────────────────────────────
+        # Guardamos punto_handicap o punto_total según el mercado para que
+        # después podamos evaluar W/L automáticamente con el resultado real.
+        punto_num = outcomes_punto.get(outcome_name)
+        punto_handicap_val = punto_num if market_key in ("spreads",) else None
+        punto_total_val    = punto_num if market_key in ("totals",) else None
+        event_id_val      = ev.get("id", "")
+        sport_key_val     = meta.get("sport_key", "")
+        commence_time_val = commence  # ISO 8601 UTC desde The Odds API
 
         # Ajustar con contexto deportivo real
         if ctx_deportivo:
@@ -758,6 +805,10 @@ def _analizar(ev, meta, market_key, es_vivo=False, oddspapi_eventos=None):
                     ganancia_pot=gan_s, roi_pct=round(gan_s/BANKROLL*100,2),
                     contexto_id=ctx["id"], contexto_desc=ctx["descripcion"],
                     hora_local=hora_local, horas_para_inicio=round(horas,1),
+                    # Campos auto-tracking
+                    event_id=event_id_val, sport_key=sport_key_val,
+                    commence_time=commence_time_val,
+                    punto_handicap=punto_handicap_val, punto_total=punto_total_val,
                 ))
 
         # Value Pick
@@ -812,6 +863,10 @@ def _analizar(ev, meta, market_key, es_vivo=False, oddspapi_eventos=None):
             contexto_id=ctx["id"], contexto_desc=ctx["descripcion"],
             descartado=desc, razon_descarte=razon,
             hora_local=hora_local, horas_para_inicio=round(horas,1),
+            # Campos auto-tracking
+            event_id=event_id_val, sport_key=sport_key_val,
+            commence_time=commence_time_val,
+            punto_handicap=punto_handicap_val, punto_total=punto_total_val,
         ))
 
     return value_picks, sure_picks
@@ -874,6 +929,11 @@ def escanear_mercado(bankroll_usuario: float = None) -> dict:
             # próximos. La función decide internamente (regla 12hs).
             op_eventos = get_oddspapi_bookmakers(sport_key, eventos)
 
+            # Inyectar sport_key al meta para que _analizar pueda guardarlo
+            # en los picks (auto-tracking necesita identificar el sport en el
+            # endpoint /scores de The Odds API).
+            meta_con_sport = {**meta, "sport_key": sport_key}
+
             for ev in eventos:
                 total += 1
                 horas = horas_hasta(ev.get("commence_time",""))
@@ -885,11 +945,11 @@ def escanear_mercado(bankroll_usuario: float = None) -> dict:
                         "hora_local": format_hora(ev.get("commence_time",""), horas),
                     })
                     for mk in markets:
-                        vp, _ = _analizar(ev, meta, mk, es_vivo=True, oddspapi_eventos=op_eventos)
+                        vp, _ = _analizar(ev, meta_con_sport, mk, es_vivo=True, oddspapi_eventos=op_eventos)
                         all_vivo.extend(p for p in vp if not p.descartado)
                 elif horas <= VENTANA_HORAS:
                     for mk in markets:
-                        vp, sp = _analizar(ev, meta, mk, es_vivo=False, oddspapi_eventos=op_eventos)
+                        vp, sp = _analizar(ev, meta_con_sport, mk, es_vivo=False, oddspapi_eventos=op_eventos)
                         for p in vp:
                             (descartados if p.descartado else all_value).append(p)
                         all_sure.extend(sp)
