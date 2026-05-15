@@ -26,7 +26,7 @@ MIN_EDGE       = float(os.getenv("MIN_EDGE_PCT", 0.10))     # Edge mínimo 10% �
 MIN_EDGE_VIVO  = 0.10                                        # En vivo más estricto
 MAX_GOLD_TIPS  = int(os.getenv("MAX_GOLD_TIPS", 8))
 VENTANA_HORAS  = int(os.getenv("VENTANA_HORAS", 48))
-MIN_SURE_PROB  = float(os.getenv("MIN_SURE_PROB", 0.82))    # Slightly lower para más picks
+MIN_SURE_PROB  = float(os.getenv("MIN_SURE_PROB", 0.80))    # 80% prob mínima — alta confianza pero NO infalible (1 de 5 puede fallar). Stake siempre vía Kelly.
 TZ_OFFSET      = -3  # Argentina/LATAM (UTC-3). Hardcodeado para evitar errores de config en Railway.
 BASE_URL       = "https://api.the-odds-api.com/v4"
 ODDSPAPI_URL   = "https://api.oddspapi.io/v4"  # Dominio correcto (.io, no .com) y versión v4
@@ -727,8 +727,10 @@ def _analizar(ev, meta, market_key, es_vivo=False, oddspapi_eventos=None):
         else:
             ctx_señales = []
 
-        # Sure Pick
-        if not es_vivo and p_mod >= MIN_SURE_PROB and not ctx.get("descartar") and 1.10 <= mejor <= 5.0:
+        # Sure Pick — picks de alta confianza (≥75% prob modelo).
+        # Respeta el cap de cuota @2.50 (política conservadora del usuario).
+        # NO son "infalibles": en 100 picks a 75%, perdés 25. El stake usa Kelly.
+        if not es_vivo and p_mod >= MIN_SURE_PROB and not ctx.get("descartar") and 1.10 <= mejor <= ODDS_GOLD_MAX:
             stake_s = kelly_stake(p_mod, mejor, KELLY_FRAC, 0.05)
             gan_s   = round(stake_s * (mejor - 1), 2)
             sure_picks.append(SurePick(
